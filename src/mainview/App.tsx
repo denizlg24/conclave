@@ -1,3 +1,9 @@
+import { TitleBar } from "../shared/components/title-bar";
+
 export default function App() {
-  return <main></main>;
+  return (
+    <main>
+      <TitleBar />
+    </main>
+  );
 }
