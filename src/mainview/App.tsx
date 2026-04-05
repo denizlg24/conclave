@@ -1,9 +1,5 @@
-import { TitleBar } from "../shared/components/title-bar";
-
 export default function App() {
   return (
-    <main>
-      <TitleBar />
-    </main>
+    <main className="bg-[url(/office_bg.png)] w-full h-screen bg-contain bg-no-repeat bg-black"></main>
   );
 }

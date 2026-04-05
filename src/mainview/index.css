@@ -1,6 +1,8 @@
+@import "shadcn/tailwind.css";
 @import "tailwindcss";
 @import "tw-animate-css";
 @plugin '@tailwindcss/typography';
+
 
 @custom-variant dark (&:is(.dark *));
 
@@ -94,7 +96,6 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 }
-
 
 .dark {
   --background: #303630;

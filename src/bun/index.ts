@@ -21,23 +21,12 @@ async function getMainViewUrl(): Promise<string> {
   return "views://mainview/index.html";
 }
 
-// Create the main application window
 const url = await getMainViewUrl();
 
 const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
   handlers: {
     requests: {},
-    messages: {
-      closeWindow: () => mainWindow.close(),
-      minimizeWindow: () => mainWindow.minimize(),
-      maximizeWindow: () => {
-        if (mainWindow.isMaximized()) {
-          mainWindow.unmaximize();
-        } else {
-          mainWindow.maximize();
-        }
-      },
-    },
+    messages: {},
   },
 });
 
@@ -47,14 +36,10 @@ const mainWindow = new BrowserWindow({
   frame: {
     width: 1280,
     height: 720,
-    x: 0,
-    y: 0,
+    x: (1920 - 1280) / 2,
+    y: (1080 - 720) / 2,
   },
   rpc,
-  titleBarStyle: "hidden",
 });
-
-
-
 
 console.log("Conclave started!");
