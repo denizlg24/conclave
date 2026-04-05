@@ -51,11 +51,17 @@ export function projectEvent(
       const existing = base.tasks.find((t) => t.id === payload.taskId);
       if (existing) return base;
 
-      const hasPendingDeps = payload.deps.length > 0 &&
-        payload.deps.some((depId) => {
-          const dep = base.tasks.find((t) => t.id === depId);
-          return !dep || dep.status !== "done";
-        });
+      let status: OrchestrationTask["status"];
+      if (payload.initialStatus === "proposed") {
+        status = "proposed";
+      } else {
+        const hasPendingDeps = payload.deps.length > 0 &&
+          payload.deps.some((depId) => {
+            const dep = base.tasks.find((t) => t.id === depId);
+            return !dep || dep.status !== "done";
+          });
+        status = hasPendingDeps ? "blocked" : "pending";
+      }
 
       const newTask: OrchestrationTask = {
         id: payload.taskId,
@@ -64,7 +70,7 @@ export function projectEvent(
         description: payload.description,
         owner: null,
         ownerRole: null,
-        status: hasPendingDeps ? "blocked" : "pending",
+        status,
         deps: [...payload.deps],
         input: payload.input,
         output: null,
@@ -179,6 +185,9 @@ export function projectEvent(
         agenda: [...payload.agenda],
         participants: [...payload.participants],
         status: "scheduled",
+        contributions: [],
+        summary: null,
+        proposedTaskIds: [],
         approvedTaskIds: [],
         rejectedTaskIds: [],
         createdAt: payload.scheduledAt,
@@ -195,6 +204,52 @@ export function projectEvent(
           approvedTaskIds: [...payload.approvedTaskIds],
           rejectedTaskIds: [...payload.rejectedTaskIds],
           updatedAt: payload.approvedAt,
+        }),
+      };
+    }
+
+    case "meeting.started": {
+      const { payload } = event;
+      return {
+        ...base,
+        meetings: updateMeeting(base.meetings, payload.meetingId, {
+          status: "in_progress",
+          updatedAt: payload.startedAt,
+        }),
+      };
+    }
+
+    case "meeting.contribution-added": {
+      const { payload } = event;
+      const meeting = base.meetings.find((m) => m.id === payload.meetingId);
+      if (!meeting) return base;
+
+      return {
+        ...base,
+        meetings: updateMeeting(base.meetings, payload.meetingId, {
+          contributions: [
+            ...meeting.contributions,
+            {
+              agentRole: payload.agentRole,
+              agendaItemIndex: payload.agendaItemIndex,
+              content: payload.content,
+              references: [...payload.references],
+            },
+          ],
+          updatedAt: payload.addedAt,
+        }),
+      };
+    }
+
+    case "meeting.completed": {
+      const { payload } = event;
+      return {
+        ...base,
+        meetings: updateMeeting(base.meetings, payload.meetingId, {
+          status: "completed",
+          summary: payload.summary,
+          proposedTaskIds: [...payload.proposedTaskIds],
+          updatedAt: payload.completedAt,
         }),
       };
     }

@@ -531,8 +531,8 @@ describe("decideOrchestrationCommand", () => {
   describe("meeting.approve-tasks command", () => {
     test("produces meeting.tasks-approved event", async () => {
       const meeting = makeMeeting({ id: makeMeetingId("mtg-1") });
-      const task1 = makeTask({ id: makeTaskId("task-1") });
-      const task2 = makeTask({ id: makeTaskId("task-2") });
+      const task1 = makeTask({ id: makeTaskId("task-1"), status: "proposed" });
+      const task2 = makeTask({ id: makeTaskId("task-2"), status: "proposed" });
       const command = makeApproveTasksCommand(
         meeting.id,
         [task1.id],

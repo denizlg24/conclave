@@ -25,6 +25,7 @@ export {
   OrchestrationTask,
   OrchestrationMeeting,
   OrchestrationReadModel,
+  MeetingContribution,
   TaskCreatedPayload,
   TaskAssignedPayload,
   TaskStatusUpdatedPayload,
@@ -32,4 +33,9 @@ export {
   TaskDependencyRemovedPayload,
   MeetingScheduledPayload,
   MeetingTasksApprovedPayload,
+  MeetingStartedPayload,
+  MeetingContributionAddedPayload,
+  MeetingCompletedPayload,
 } from "./orchestration";
+
+export type { BusEvent } from "./bus-event";

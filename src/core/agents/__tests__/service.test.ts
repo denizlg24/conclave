@@ -262,7 +262,7 @@ describe("createAgentService", () => {
     });
 
     test("passes taskId to adapter when provided", async () => {
-      let receivedTaskId: TaskId | null = null;
+      let receivedTaskId: string | null = null;
       const sessions = new Map<AgentId, AgentSession>();
       const adapter = createMockAdapter(sessions, {
         sendMessage: (_agentId, _prompt, taskId) => {
@@ -277,7 +277,7 @@ describe("createAgentService", () => {
       await Effect.runPromise(service.startAgent(agentId, "developer", "/tmp"));
       await Effect.runPromise(service.sendMessage(agentId, "work on task", taskId));
 
-      expect(receivedTaskId).toBe(taskId);
+      expect(String(receivedTaskId)).toBe("task-123");
     });
 
     test("passes null taskId when not provided", async () => {

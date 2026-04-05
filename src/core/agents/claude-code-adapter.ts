@@ -159,19 +159,14 @@ function buildClaudeArgs(
     "--output-format",
     "stream-json",
     "--verbose",
-    "--bare",
     "--model",
     config.model,
     "--max-turns",
     String(config.maxTurns),
   ];
 
-  if (config.maxTokens > 0) {
-    args.push("--max-tokens", String(config.maxTokens));
-  }
-
   if (config.allowedTools.length > 0) {
-    args.push("--allowedTools", config.allowedTools.join(" "));
+    args.push("--allowedTools", config.allowedTools.join(","));
   }
 
   if (resumeSessionId) {
@@ -268,21 +263,41 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
       Effect.gen(function* () {
         const args = buildClaudeArgs(config, prompt, resumeSessionId);
 
+        console.log(`[claude-adapter] HOME=${process.env.HOME}, USERPROFILE=${process.env.USERPROFILE}`);
+        console.log(`[claude-adapter] Spawning claude (cwd: ${config.workingDirectory})`);
+
+        const spawnEnv = Object.create(null) as Record<string, string>;
+        for (const [k, v] of Object.entries(process.env)) {
+          if (v !== undefined) spawnEnv[k] = v;
+        }
+        if (!spawnEnv.HOME && spawnEnv.USERPROFILE) {
+          spawnEnv.HOME = spawnEnv.USERPROFILE;
+        }
+
+        if (!spawnEnv.PATH && spawnEnv.Path) {
+          spawnEnv.PATH = spawnEnv.Path;
+        }
+
         const proc = yield* Effect.try({
           try: () =>
             Bun.spawn(["claude", ...args], {
               cwd: config.workingDirectory,
+              env: spawnEnv,
               stdout: "pipe",
               stderr: "pipe",
               stdin: "ignore",
             }),
-          catch: (err) =>
-            new AgentSpawnError({
+          catch: (err) => {
+            console.error(`[claude-adapter] Spawn failed for ${agentId}:`, String(err));
+            return new AgentSpawnError({
               agentId,
               command: `claude ${args.join(" ")}`,
               detail: String(err),
-            }),
+            });
+          },
         });
+
+        console.log(`[claude-adapter] Process spawned for ${agentId}, PID: ${proc.pid}`);
 
         // Store process reference for interruption
         yield* updateSession(agentId, {
@@ -314,6 +329,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
 
                   for (const block of parsed.content) {
                     if (block.type === "text" && block.text) {
+                      console.log(`[claude-adapter] ${agentId} output: ${block.text.slice(0, 200)}`);
                       Effect.runSync(
                         emit({
                           type: "agent.output.produced",
@@ -329,6 +345,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
                       block.name &&
                       block.id
                     ) {
+                      console.log(`[claude-adapter] ${agentId} tool: ${block.name}`);
                       Effect.runSync(
                         emit({
                           type: "agent.tool.invoked",
@@ -413,9 +430,11 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
             }
 
             const exitCode = await proc.exited;
+            console.log(`[claude-adapter] Process exited for ${agentId}, code: ${exitCode}, resultLength: ${resultText.length}`);
 
             if (exitCode !== 0 && !resultText) {
               const stderrText = await new Response(stderr).text();
+              console.error(`[claude-adapter] stderr for ${agentId}:`, stderrText);
               throw new Error(
                 `Claude exited with code ${exitCode}: ${stderrText}`,
               );
@@ -423,12 +442,14 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
 
             return resultText;
           },
-          catch: (err) =>
-            new AgentAdapterError({
+          catch: (err) => {
+            console.error(`[claude-adapter] runClaudeProcess error for ${agentId}:`, String(err));
+            return new AgentAdapterError({
               agentId,
               operation: "runClaudeProcess",
               detail: String(err),
-            }),
+            });
+          },
         });
 
         return result;
@@ -491,6 +512,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
       taskId,
     ) =>
       Effect.gen(function* () {
+        console.log(`[claude-adapter] sendMessage called for ${agentId}, taskId: ${taskId}`);
         const session = yield* getSessionOrFail(agentId);
 
         // Budget checks

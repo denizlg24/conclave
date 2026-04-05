@@ -14,6 +14,7 @@ import {
   requireTaskStatus,
   requireMeetingAbsent,
   requireMeeting,
+  requireMeetingStatus,
   requireNoCyclicDependency,
 } from "./command-invariants";
 
@@ -47,6 +48,8 @@ const VALID_STATUS_TRANSITIONS: Record<string, ReadonlyArray<string>> = {
   blocked: ["pending", "assigned", "failed"],
   done: [],
   failed: [],
+  proposed: ["pending", "blocked", "rejected"],
+  rejected: [],
 };
 
 export const decideOrchestrationCommand = Effect.fn(
@@ -89,6 +92,9 @@ export const decideOrchestrationCommand = Effect.fn(
           description: command.description,
           deps: command.deps,
           input: command.input,
+          ...(command.initialStatus
+            ? { initialStatus: command.initialStatus }
+            : {}),
           createdAt: command.createdAt,
         },
       };
@@ -249,15 +255,23 @@ export const decideOrchestrationCommand = Effect.fn(
         meetingId: command.meetingId,
       });
 
-      // Verify all referenced tasks exist
+      // Verify all referenced tasks exist and are in "proposed" status
       for (const taskId of [
         ...command.approvedTaskIds,
         ...command.rejectedTaskIds,
       ]) {
-        yield* requireTask({ readModel, command, taskId });
+        yield* requireTaskStatus({
+          readModel,
+          command,
+          taskId,
+          allowed: ["proposed"],
+        });
       }
 
-      return {
+      const events: EventWithoutSequence[] = [];
+
+      // Emit the meeting-level event
+      events.push({
         ...withEventBase({
           aggregateKind: "meeting",
           aggregateId: command.meetingId,
@@ -270,6 +284,125 @@ export const decideOrchestrationCommand = Effect.fn(
           approvedTaskIds: command.approvedTaskIds,
           rejectedTaskIds: command.rejectedTaskIds,
           approvedAt: command.createdAt,
+        },
+      });
+
+      // Transition approved tasks: proposed → pending
+      for (const taskId of command.approvedTaskIds) {
+        events.push({
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: taskId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.status-updated" as const,
+          payload: {
+            taskId,
+            previousStatus: "proposed",
+            status: "pending",
+            reason: `Approved via meeting '${command.meetingId}'`,
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+
+      // Transition rejected tasks: proposed → rejected
+      for (const taskId of command.rejectedTaskIds) {
+        events.push({
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: taskId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.status-updated" as const,
+          payload: {
+            taskId,
+            previousStatus: "proposed",
+            status: "rejected",
+            reason: `Rejected via meeting '${command.meetingId}'`,
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+
+      return events;
+    }
+
+    case "meeting.start": {
+      yield* requireMeetingStatus({
+        readModel,
+        command,
+        meetingId: command.meetingId,
+        allowed: ["scheduled"],
+      });
+
+      return {
+        ...withEventBase({
+          aggregateKind: "meeting",
+          aggregateId: command.meetingId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "meeting.started" as const,
+        payload: {
+          meetingId: command.meetingId,
+          startedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "meeting.contribute": {
+      yield* requireMeetingStatus({
+        readModel,
+        command,
+        meetingId: command.meetingId,
+        allowed: ["in_progress"],
+      });
+
+      return {
+        ...withEventBase({
+          aggregateKind: "meeting",
+          aggregateId: command.meetingId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+          metadata: { agentRole: command.agentRole },
+        }),
+        type: "meeting.contribution-added" as const,
+        payload: {
+          meetingId: command.meetingId,
+          agentRole: command.agentRole,
+          agendaItemIndex: command.agendaItemIndex,
+          content: command.content,
+          references: command.references,
+          addedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "meeting.complete": {
+      yield* requireMeetingStatus({
+        readModel,
+        command,
+        meetingId: command.meetingId,
+        allowed: ["in_progress"],
+      });
+
+      return {
+        ...withEventBase({
+          aggregateKind: "meeting",
+          aggregateId: command.meetingId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "meeting.completed" as const,
+        payload: {
+          meetingId: command.meetingId,
+          summary: command.summary,
+          proposedTaskIds: [],
+          proposedTasks: command.proposedTasks,
+          completedAt: command.createdAt,
         },
       };
     }

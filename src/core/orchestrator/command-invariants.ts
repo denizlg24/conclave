@@ -6,6 +6,7 @@ import type {
   OrchestrationTask,
   OrchestrationMeeting,
   TaskStatus,
+  MeetingStatus,
 } from "@/shared/types/orchestration";
 import type { TaskId, MeetingId } from "@/shared/types/base-schemas";
 
@@ -122,6 +123,32 @@ export function requireMeetingAbsent(input: {
       `Meeting '${input.meetingId}' already exists.`,
     ),
   );
+}
+
+export function requireMeetingStatus(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly meetingId: MeetingId;
+  readonly allowed: ReadonlyArray<MeetingStatus>;
+}): Effect.Effect<OrchestrationMeeting, CommandInvariantError> {
+  const meeting = findMeetingById(input.readModel, input.meetingId);
+  if (!meeting) {
+    return Effect.fail(
+      invariantError(
+        input.command.type,
+        `Meeting '${input.meetingId}' does not exist.`,
+      ),
+    );
+  }
+  if (!input.allowed.includes(meeting.status)) {
+    return Effect.fail(
+      invariantError(
+        input.command.type,
+        `Meeting '${input.meetingId}' is in status '${meeting.status}', expected one of: ${input.allowed.join(", ")}.`,
+      ),
+    );
+  }
+  return Effect.succeed(meeting);
 }
 
 export function requireNoCyclicDependency(input: {

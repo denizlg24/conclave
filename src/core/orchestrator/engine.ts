@@ -6,6 +6,7 @@ import type {
   OrchestrationReadModel,
 } from "@/shared/types/orchestration";
 
+import type { EventBusShape } from "../communication/event-bus";
 import { DispatchError, type EventStoreError } from "./errors";
 import { decideOrchestrationCommand } from "./decider";
 import {
@@ -34,9 +35,12 @@ export interface OrchestrationEngineShape {
   readonly replay: () => Effect.Effect<OrchestrationReadModel, EventStoreError>;
 }
 
-export function createOrchestrationEngine(): Effect.Effect<OrchestrationEngineShape> {
+export function createOrchestrationEngine(options?: {
+  eventBus?: EventBusShape;
+}): Effect.Effect<OrchestrationEngineShape> {
   return Effect.gen(function* () {
     const store: EventStoreShape = yield* createInMemoryEventStore();
+    const bus = options?.eventBus;
     const readModelRef = yield* Ref.make<OrchestrationReadModel>(
       createEmptyReadModel(new Date().toISOString()),
     );
@@ -75,6 +79,13 @@ export function createOrchestrationEngine(): Effect.Effect<OrchestrationEngineSh
         yield* Ref.update(readModelRef, (model) =>
           projectEvents(model, persistedEvents),
         );
+
+        // Publish to event bus if configured
+        if (bus) {
+          for (const evt of persistedEvents) {
+            yield* bus.publish(evt);
+          }
+        }
 
         const lastEvent = persistedEvents[persistedEvents.length - 1]!;
         return { sequence: lastEvent.sequence, events: persistedEvents };

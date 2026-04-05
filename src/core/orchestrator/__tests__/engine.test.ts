@@ -335,10 +335,10 @@ describe("OrchestrationEngine.dispatch", () => {
       const task2Id = makeTaskId("task-2");
 
       await Effect.runPromise(
-        engine.dispatch(makeCreateTaskCommand({ taskId: task1Id })),
+        engine.dispatch(makeCreateTaskCommand({ taskId: task1Id, initialStatus: "proposed" })),
       );
       await Effect.runPromise(
-        engine.dispatch(makeCreateTaskCommand({ taskId: task2Id })),
+        engine.dispatch(makeCreateTaskCommand({ taskId: task2Id, initialStatus: "proposed" })),
       );
       await Effect.runPromise(
         engine.dispatch(makeScheduleMeetingCommand({ meetingId })),
@@ -547,12 +547,20 @@ describe("integration scenarios", () => {
     const meetingId = makeMeetingId("mtg-1");
     const task1 = makeTaskId("task-1") as TaskId;
     const task2 = makeTaskId("task-2") as TaskId;
+    const proposed1 = makeTaskId("proposed-1") as TaskId;
+    const proposed2 = makeTaskId("proposed-2") as TaskId;
 
     await Effect.runPromise(
       engine.dispatch(makeCreateTaskCommand({ taskId: task1 })),
     );
     await Effect.runPromise(
       engine.dispatch(makeCreateTaskCommand({ taskId: task2, deps: [task1] })),
+    );
+    await Effect.runPromise(
+      engine.dispatch(makeCreateTaskCommand({ taskId: proposed1, initialStatus: "proposed" })),
+    );
+    await Effect.runPromise(
+      engine.dispatch(makeCreateTaskCommand({ taskId: proposed2, initialStatus: "proposed" })),
     );
     await Effect.runPromise(
       engine.dispatch(makeScheduleMeetingCommand({ meetingId })),
@@ -567,7 +575,7 @@ describe("integration scenarios", () => {
       engine.dispatch(makeUpdateStatusCommand(task1, "done")),
     );
     await Effect.runPromise(
-      engine.dispatch(makeApproveTasksCommand(meetingId, [task1], [task2])),
+      engine.dispatch(makeApproveTasksCommand(meetingId, [proposed1], [proposed2])),
     );
 
     const currentModel = await Effect.runPromise(engine.getReadModel());
