@@ -31,6 +31,8 @@ export function createAgentReactor(deps: {
     prompt: string,
     taskType: string,
   ): void => {
+    agentService.markBusy(agentId);
+
     const effect = agentService
       .sendMessage(agentId, prompt, taskId)
       .pipe(
@@ -40,7 +42,7 @@ export function createAgentReactor(deps: {
               type: "task.update-status",
               commandId: crypto.randomUUID() as CommandId,
               taskId,
-              status: taskType === "review" ? "done" : "review",
+              status: taskType === "planning" ? "review" : "done",
               output,
               createdAt: new Date().toISOString(),
             }),
@@ -61,9 +63,11 @@ export function createAgentReactor(deps: {
     console.log(`[${REACTOR_NAME}] Starting agent execution for task ${taskId}`);
     Effect.runPromise(effect)
       .then(() => {
+        agentService.markAvailable(agentId);
         console.log(`[${REACTOR_NAME}] Agent execution completed for task ${taskId}`);
       })
       .catch((err) => {
+        agentService.markAvailable(agentId);
         console.error(`[${REACTOR_NAME}] Agent execution failed for task ${taskId}:`, err);
       });
   };
@@ -93,6 +97,25 @@ export function createAgentReactor(deps: {
       const task = readModel.tasks.find((t) => t.id === payload.taskId);
       if (!task) return;
 
+      // Build team resources section for PM tasks
+      const teamSection =
+        task.taskType === "planning"
+          ? (() => {
+              const team = agentService.getTeamComposition();
+              return [
+                ``,
+                `## Team Resources`,
+                `You have the following agents available:`,
+                `- Developers: up to ${team.developer.max} (can work in parallel on independent tasks)`,
+                `- Testers: up to ${team.tester.max} (can test in parallel)`,
+                `- Reviewers: ${team.reviewer.max}`,
+                ``,
+                `Plan your task decomposition to leverage parallel execution where possible.`,
+                `Tasks with no dependencies between them will be assigned to separate agents simultaneously.`,
+              ].join("\n");
+            })()
+          : "";
+
       const prompt = [
         `## Task Assignment`,
         ``,
@@ -104,6 +127,7 @@ export function createAgentReactor(deps: {
         task.input
           ? `**Input Context:**\n\`\`\`json\n${JSON.stringify(task.input, null, 2)}\n\`\`\``
           : "",
+        teamSection,
         ``,
         `Please complete this task and provide your output as structured JSON.`,
       ]

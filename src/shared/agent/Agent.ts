@@ -1,4 +1,10 @@
 export type Direction = "up" | "down" | "left" | "right";
+export type AgentState =
+  | "idle"
+  | "working"
+  | "heading_to_meeting"
+  | "in_meeting"
+  | "returning";
 
 export interface IAgentConstructor {
   config: {
@@ -19,7 +25,9 @@ export class Agent {
   bounds: { x: number; y: number };
   moveSpeed: number;
   facingDirection: Direction = "down";
+  agentState: AgentState = "idle";
   private animationDuration = 0;
+  private arrivalTime = 0;
 
   constructor(options: IAgentConstructor) {
     this.id = options.config.id;
@@ -27,6 +35,7 @@ export class Agent {
     this.position = options.display.position ?? { x: 0, y: 0 };
     this.bounds = options.display.bounds ?? { x: 1000, y: 1000 };
     this.moveSpeed = options.display.moveSpeed ?? 120;
+    this.arrivalTime = Date.now();
   }
 
   setColor(color: string) {
@@ -51,8 +60,24 @@ export class Agent {
     const distance = Math.sqrt(dx * dx + dy * dy);
     this.animationDuration = distance / this.moveSpeed;
     this.position = { x, y };
+    this.arrivalTime = Date.now() + this.animationDuration * 1000 + 500;
 
     return this.animationDuration;
+  }
+
+  hasArrived(now: number): boolean {
+    return now >= this.arrivalTime;
+  }
+
+  transitionTo(
+    state: AgentState,
+    destination?: { x: number; y: number },
+  ): void {
+    this.agentState = state;
+    if (destination) {
+      this.moveTo(destination.x, destination.y);
+      this.display();
+    }
   }
 
   display() {

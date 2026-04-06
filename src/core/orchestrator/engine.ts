@@ -35,15 +35,27 @@ export interface OrchestrationEngineShape {
   readonly replay: () => Effect.Effect<OrchestrationReadModel, EventStoreError>;
 }
 
-export function createOrchestrationEngine(options?: {
+export interface OrchestrationEngineOptions {
   eventBus?: EventBusShape;
-}): Effect.Effect<OrchestrationEngineShape> {
+  eventStore?: EventStoreShape;
+}
+
+export function createOrchestrationEngine(
+  options?: OrchestrationEngineOptions,
+): Effect.Effect<OrchestrationEngineShape, EventStoreError> {
   return Effect.gen(function* () {
-    const store: EventStoreShape = yield* createInMemoryEventStore();
+    const store: EventStoreShape = options?.eventStore
+      ? options.eventStore
+      : yield* createInMemoryEventStore();
     const bus = options?.eventBus;
-    const readModelRef = yield* Ref.make<OrchestrationReadModel>(
-      createEmptyReadModel(new Date().toISOString()),
-    );
+
+    // Load existing events and rebuild read model
+    const existingEvents = yield* store.readAll();
+    const initialReadModel = existingEvents.length > 0
+      ? projectEvents(createEmptyReadModel(new Date().toISOString()), existingEvents)
+      : createEmptyReadModel(new Date().toISOString());
+
+    const readModelRef = yield* Ref.make<OrchestrationReadModel>(initialReadModel);
 
     const getReadModel: OrchestrationEngineShape["getReadModel"] = () =>
       Ref.get(readModelRef);

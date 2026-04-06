@@ -1,25 +1,161 @@
-import { useEffect, useRef, useState } from "react";
-import { Agent } from "../shared/agent/Agent";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from "react";
+import { Agent, type AgentState } from "../shared/agent/Agent";
 import { AgentSprite } from "../shared/components/agents/AgentSprite";
 import { ConclaveProvider, useConclave } from "./hooks/use-conclave";
 import { GameHUD } from "./components/GameHUD";
+import { ProjectScreen } from "./components/ProjectScreen";
+import { AgentPanel } from "./components/AgentPanel";
+import type { SerializedAgentInfo } from "../shared/rpc/rpc-schema";
 
-const ROLE_CONFIG = [
-  { id: "pm", label: "PM", color: "#a855f7" },
-  { id: "dev", label: "DEV", color: "#3b82f6" },
-  { id: "reviewer", label: "QA", color: "#22c55e" },
-] as const;
+const APP_HEIGHT_VAR = "--app-height";
 
-function AgentLabel({ label, status }: { label: string; status?: string }) {
+function syncAppHeight() {
+  // Use clientHeight — it reflects the actual rendered area of the webview,
+  // unlike 100vh / innerHeight which can include the native title bar in Electrobun.
+  const viewportHeight =
+    document.documentElement.clientHeight || window.innerHeight;
+  document.documentElement.style.setProperty(
+    APP_HEIGHT_VAR,
+    `${Math.round(viewportHeight)}px`,
+  );
+}
+
+syncAppHeight();
+
+const WORKSTATIONS: Array<{ x: number; y: number; label: string }> = [
+  { x: 480, y: 552, label: "Desk A1" },
+  { x: 624, y: 552, label: "Desk A2" },
+  { x:744, y: 552, label: "Desk B1" },
+  { x: 896, y: 552, label: "Desk B2" },
+  { x: 896, y: 440, label: "Desk C1" },
+  { x: 528, y: 400, label: "Desk C2" },
+  { x: 512, y: 200, label: "Desk D1" },
+  { x: 640, y: 200, label: "Desk D2" },
+];
+
+const PM_STATION = { x: 168, y: 430 };
+
+const ROLE_DESK_PREFERENCES: Record<string, number[]> = {
+  pm: [],
+  developer: [0, 1, 2, 3],
+  reviewer: [4, 5],
+  tester: [6, 7],
+};
+
+const MEETING_CENTER = { x: 168, y: 552 };
+const MEETING_RADIUS_X = 100;
+const MEETING_RADIUS_Y = 130;
+
+function meetingSeat(index: number, total: number): { x: number; y: number } {
+  const angle = (index / total) * Math.PI * 2 - Math.PI / 2;
+  return {
+    x: MEETING_CENTER.x + Math.cos(angle) * MEETING_RADIUS_X,
+    y: MEETING_CENTER.y + Math.sin(angle) * MEETING_RADIUS_Y,
+  };
+}
+
+const occupiedDesks = new Set<number>();
+
+function assignDesk(role: string): { x: number; y: number; deskIdx: number | null } {
+  if (role === "pm") return { ...PM_STATION, deskIdx: null };
+  
+  const prefs = ROLE_DESK_PREFERENCES[role] ?? [0, 1, 2, 3];
+  
+  for (const deskIdx of prefs) {
+    if (!occupiedDesks.has(deskIdx)) {
+      occupiedDesks.add(deskIdx);
+      return { ...WORKSTATIONS[deskIdx], deskIdx };
+    }
+  }
+  
+  for (let i = 0; i < WORKSTATIONS.length; i++) {
+    if (!occupiedDesks.has(i)) {
+      occupiedDesks.add(i);
+      return { ...WORKSTATIONS[i], deskIdx: i };
+    }
+  }
+  
+  const fallbackIdx = prefs[0] ?? 0;
+  return { ...WORKSTATIONS[fallbackIdx], deskIdx: fallbackIdx };
+}
+
+function getDeskPosition(deskIdx: number | null, role: string): { x: number; y: number } {
+  if (role === "pm" || deskIdx === null) return PM_STATION;
+  return WORKSTATIONS[deskIdx] ?? WORKSTATIONS[0];
+}
+
+const ROLE_COLORS: Record<string, string> = {
+  pm: "#c8a96e",
+  developer: "#a1bc98",
+  reviewer: "#e07a5f",
+  tester: "#f2cc8f",
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  pm: "PM",
+  developer: "DEV",
+  reviewer: "REV",
+  tester: "QA",
+};
+
+interface Toast {
+  id: string;
+  message: string;
+  color: string;
+  timestamp: number;
+}
+
+function ToastContainer({ toasts }: { toasts: Toast[] }) {
   return (
-    <div className="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap pointer-events-none">
+    <div className="absolute top-10 left-1/2 -translate-x-1/2 flex flex-col gap-1.5 z-40 pointer-events-none">
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className="rpg-toast flex items-center gap-2"
+          style={{ borderLeftWidth: 3, borderLeftColor: toast.color }}
+        >
+          <span className="text-[11px] rpg-mono" style={{ color: toast.color }}>
+            {toast.message}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AgentLabel({
+  label,
+  status,
+  agentState,
+  color,
+}: {
+  label: string;
+  status?: string;
+  agentState: AgentState;
+  color: string;
+}) {
+  const stateText =
+    agentState === "working" && status ? status :
+    agentState === "heading_to_meeting" ? "moving" :
+    agentState === "in_meeting" ? "in council" :
+    agentState === "returning" ? "returning" :
+    "";
+
+  return (
+    <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap pointer-events-none">
       <span
-        className="text-[9px] px-1.5 py-0.5 rounded-sm bg-black/70 border border-white/15 text-white/80"
-        style={{ fontFamily: "monospace" }}
+        className="rpg-mono text-[11px] px-1.5 py-0.5 inline-flex items-center gap-1"
+        style={{
+          background: "rgba(20, 26, 20, 0.85)",
+          border: "1px solid rgba(58, 74, 53, 0.6)",
+          color: "var(--rpg-text)",
+        }}
       >
-        {label}
-        {status && (
-          <span className="text-white/40 ml-1">{status}</span>
+        <span style={{ color }}>{label}</span>
+        {stateText && (
+          <span style={{ color: "var(--rpg-text-dim)", fontSize: "8px" }}>
+            {stateText}
+          </span>
         )}
       </span>
     </div>
@@ -27,96 +163,336 @@ function AgentLabel({ label, status }: { label: string; status?: string }) {
 }
 
 function GameScene() {
-  const { readModel } = useConclave();
+  const { readModel, events, agentEvents, agentRoster } = useConclave();
   const tasks = readModel?.tasks ?? [];
+  const meetings = readModel?.meetings ?? [];
 
-  const [agents] = useState<Agent[]>(() =>
-    ROLE_CONFIG.map(
-      (cfg, i) =>
-        new Agent({
-          config: { id: cfg.id },
-          display: {
-            color: cfg.color,
-            position: { x: 200 + i * 250, y: 250 + (i % 2) * 80 },
-            bounds: { x: 1100, y: 550 },
-            moveSpeed: 60 + Math.random() * 80,
-          },
-        }),
-    ),
-  );
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const roleCounterRef = useRef<Map<string, number>>(new Map());
+
+  const agentMapRef = useRef<Map<string, { agent: Agent; info: SerializedAgentInfo; deskIdx: number | null }>>(new Map());
+
+  const agents = useMemo(() => {
+    const map = agentMapRef.current;
+
+    for (const info of agentRoster) {
+      if (!map.has(info.agentId)) {
+        const counter = roleCounterRef.current;
+        const roleIdx = counter.get(info.role) ?? 0;
+        counter.set(info.role, roleIdx + 1);
+
+        const desk = assignDesk(info.role);
+        const color = ROLE_COLORS[info.role] ?? "#8a9484";
+
+        map.set(info.agentId, {
+          info,
+          deskIdx: desk.deskIdx,
+          agent: new Agent({
+            config: { id: info.agentId },
+            display: {
+              color,
+              position: { x: desk.x, y: desk.y },
+              bounds: { x: 1100, y: 520 },
+              moveSpeed: 70 + Math.random() * 60,
+            },
+          }),
+        });
+      }
+    }
+
+    return [...map.values()];
+  }, [agentRoster]);
+
+  const addToast = useCallback((message: string, color: string) => {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts((prev) => [...prev.slice(-4), { id, message, color, timestamp: Date.now() }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  }, []);
+
+  const prevEventsLenForToasts = useRef(0);
+  useEffect(() => {
+    if (events.length <= prevEventsLenForToasts.current) return;
+
+    const newEvents = events.slice(prevEventsLenForToasts.current);
+    prevEventsLenForToasts.current = events.length;
+
+    for (const evt of newEvents) {
+      switch (evt.type) {
+        case "TaskStatusChanged": {
+          const status = evt.payload.status as string;
+          const title = evt.payload.title as string ?? "Task";
+          if (status === "done") {
+            addToast(`Quest Complete: ${title}`, "#6a994e");
+          } else if (status === "failed") {
+            addToast(`Quest Failed: ${title}`, "#c45c4a");
+          } else if (status === "in_progress") {
+            addToast(`Quest Started: ${title}`, "#81b29a");
+          }
+          break;
+        }
+        case "MeetingStarted":
+          addToast("Council convened", "#c8a96e");
+          break;
+        case "MeetingCompleted":
+          addToast("Council adjourned", "#c8a96e");
+          break;
+      }
+    }
+  }, [events.length, events, addToast]);
 
   const [, setTick] = useState(0);
-  const moveTimers = useRef(new Map<string, number>());
+  const prevEventsLen = useRef(0);
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
 
   useEffect(() => {
-    agents.forEach((agent) => agent.display());
+    if (events.length === prevEventsLen.current) return;
+    prevEventsLen.current = events.length;
+
+    const activeMeeting = meetings.find((m) => m.status === "in_progress");
+
+    for (const { agent, info, deskIdx } of agents) {
+      const hasActiveTask = tasks.some(
+        (t) => t.owner === info.agentId && t.status === "in_progress",
+      );
+      const inMeeting =
+        activeMeeting?.participants.includes(info.role) ?? false;
+
+      if (inMeeting && agent.agentState !== "in_meeting") {
+        const seatIdx = agents.indexOf(
+          agents.find((a) => a.info.agentId === info.agentId)!,
+        );
+        const seat = meetingSeat(seatIdx, agents.length);
+        agent.transitionTo("heading_to_meeting", seat);
+      } else if (!inMeeting && agent.agentState === "in_meeting") {
+        const desk = getDeskPosition(deskIdx, info.role);
+        agent.transitionTo("returning", desk);
+      } else if (
+        hasActiveTask &&
+        !inMeeting &&
+        agent.agentState !== "working"
+      ) {
+        agent.transitionTo("working", getDeskPosition(deskIdx, info.role));
+      } else if (
+        !hasActiveTask &&
+        !inMeeting &&
+        agent.agentState === "working"
+      ) {
+        agent.transitionTo("idle", getDeskPosition(deskIdx, info.role));
+      }
+    }
+    setTick((t) => t + 1);
+  }, [events.length, agents, meetings, tasks]);
+
+  useEffect(() => {
+    agents.forEach(({ agent }) => agent.display());
 
     const interval = setInterval(() => {
       const now = Date.now();
       let changed = false;
+      const currentTasks = tasksRef.current;
 
-      for (const agent of agents) {
-        const nextMove = moveTimers.current.get(agent.id) ?? 0;
-        if (now < nextMove) continue;
+      for (const { agent, info, deskIdx } of agents) {
+        const hasActiveTask = currentTasks.some(
+          (t) => t.owner === info.agentId && t.status === "in_progress",
+        );
 
-        const targetX = 60 + Math.random() * (agent.bounds.x - 120);
-        const targetY = 100 + Math.random() * (agent.bounds.y - 160);
-        const duration = agent.moveTo(targetX, targetY);
-        agent.display();
+        if (
+          agent.agentState === "heading_to_meeting" &&
+          agent.hasArrived(now)
+        ) {
+          agent.agentState = "in_meeting";
+          changed = true;
+        }
+        if (agent.agentState === "returning" && agent.hasArrived(now)) {
+          agent.agentState = hasActiveTask ? "working" : "idle";
+          changed = true;
+        }
 
-        const pause = 1500 + Math.random() * 3000;
-        moveTimers.current.set(agent.id, now + duration * 1000 + pause);
-        changed = true;
+        if (agent.agentState === "idle" && hasActiveTask) {
+          agent.agentState = "working";
+          changed = true;
+        }
+
+        if (agent.agentState === "working" && !hasActiveTask) {
+          agent.agentState = "idle";
+          changed = true;
+        }
+
+        if (agent.agentState === "idle" && agent.hasArrived(now)) {
+          const desk = getDeskPosition(deskIdx, info.role);
+          const wanderX = desk.x;
+          const wanderY = desk.y;
+          agent.moveTo(wanderX, wanderY);
+          agent.display();
+          changed = true;
+        }
       }
 
       if (changed) setTick((t) => t + 1);
-    }, 200);
+    }, 500);
 
     return () => clearInterval(interval);
   }, [agents]);
 
-  // Map agent roles to their current task status
-  const roleTaskMap: Record<string, string | undefined> = {};
+  const agentTaskMap: Record<string, string | undefined> = {};
   for (const task of tasks) {
     if (task.owner && ["in_progress", "review"].includes(task.status)) {
-      const role = task.ownerRole;
-      if (role === "pm") roleTaskMap["pm"] = task.title.slice(0, 15);
-      if (role === "developer") roleTaskMap["dev"] = task.title.slice(0, 15);
-      if (role === "reviewer") roleTaskMap["reviewer"] = task.title.slice(0, 15);
+      agentTaskMap[task.owner] = task.title.slice(0, 18);
     }
   }
 
+  const selectedAgentEvents = selectedAgentId
+    ? agentEvents.filter((e) => e.agentId === selectedAgentId)
+    : [];
+  const selectedAgentTasks = selectedAgentId
+    ? tasks.filter((t) => t.owner === selectedAgentId)
+    : [];
+  const selectedEntry = agents.find(
+    (a) => a.info.agentId === selectedAgentId,
+  );
+
   return (
-    <main className="bg-[url(/office_bg.png)] w-full h-screen bg-contain bg-no-repeat bg-black relative overflow-hidden">
-      {/* Agents */}
-      {agents.map((agent) => {
-        const cfg = ROLE_CONFIG.find((r) => r.id === agent.id);
+    <main
+      className="w-full h-full bg-center bg-no-repeat relative overflow-hidden"
+      style={{
+        backgroundImage: "url(/office_bg.png)",
+        backgroundSize: "contain",
+        backgroundColor: "var(--rpg-bg)",
+      }}
+    >
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: "radial-gradient(ellipse at center, transparent 50%, rgba(14, 18, 14, 0.4) 100%)",
+        }}
+      />
+
+      <ToastContainer toasts={toasts} />
+
+      {agents.map(({ agent, info }) => {
+        const label = ROLE_LABELS[info.role] ?? info.role.toUpperCase();
+        const roleAgents = agents.filter((a) => a.info.role === info.role);
+        const displayLabel =
+          roleAgents.length > 1
+            ? `${label}-${roleAgents.indexOf(agents.find((a) => a.info.agentId === info.agentId)!) + 1}`
+            : label;
+
         return (
           <div
-            key={agent.id}
-            id={agent.id}
-            className="absolute"
+            key={info.agentId}
+            id={info.agentId}
+            className="absolute cursor-pointer"
             style={{ color: agent.color }}
+            onClick={() =>
+              setSelectedAgentId((prev) =>
+                prev === info.agentId ? null : info.agentId,
+              )
+            }
           >
             <AgentLabel
-              label={cfg?.label ?? agent.id}
-              status={roleTaskMap[agent.id]}
+              label={displayLabel}
+              status={agentTaskMap[info.agentId]}
+              agentState={agent.agentState}
+              color={agent.color}
             />
-            <AgentSprite direction={agent.facingDirection} />
+            <AgentSprite
+              direction={agent.facingDirection}
+              role={info.role}
+              agentState={agent.agentState}
+            />
           </div>
         );
       })}
 
-      {/* HUD overlay */}
       <GameHUD />
+
+      {selectedAgentId && selectedEntry && (
+        <AgentPanel
+          role={selectedEntry.info.role}
+          label={
+            ROLE_LABELS[selectedEntry.info.role] ?? selectedEntry.info.agentId
+          }
+          color={ROLE_COLORS[selectedEntry.info.role] ?? "#8a9484"}
+          agentState={selectedEntry.agent.agentState}
+          tasks={selectedAgentTasks}
+          agentEvents={selectedAgentEvents}
+          onClose={() => setSelectedAgentId(null)}
+        />
+      )}
     </main>
   );
+}
+
+function AppRouter() {
+  const { activeProject, connected } = useConclave();
+
+  // useLayoutEffect ensures --app-height is set synchronously after DOM
+  // mutation but before the browser paints, preventing the bottom bar from
+  // rendering offscreen on the first frame after project load.
+  useLayoutEffect(() => {
+    syncAppHeight();
+
+    const schedule = () => requestAnimationFrame(syncAppHeight);
+
+    window.addEventListener("resize", schedule);
+    window.addEventListener("orientationchange", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
+
+    return () => {
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("orientationchange", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+    };
+  }, [activeProject]);
+
+  if (!connected) {
+    return (
+      <main
+        className="w-full h-full flex items-center justify-center"
+        style={{
+          background: "var(--rpg-bg)",
+        }}
+      >
+        <div className="flex flex-col items-center gap-3">
+          <div
+            className="rpg-font text-[14px] tracking-widest"
+            style={{ color: "var(--rpg-gold)" }}
+          >
+            CONCLAVE
+          </div>
+          <div className="flex items-center gap-2">
+            <div
+              className="w-2 h-2 rounded-full animate-pulse"
+              style={{ background: "var(--rpg-gold-dim)" }}
+            />
+            <span
+              className="rpg-mono text-[11px]"
+              style={{ color: "var(--rpg-text-muted)" }}
+            >
+              Establishing connection...
+            </span>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!activeProject) {
+    return <ProjectScreen />;
+  }
+
+  return <GameScene />;
 }
 
 export default function App() {
   return (
     <ConclaveProvider>
-      <GameScene />
+      <AppRouter />
     </ConclaveProvider>
   );
 }

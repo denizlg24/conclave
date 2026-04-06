@@ -161,8 +161,6 @@ function buildClaudeArgs(
     "--verbose",
     "--model",
     config.model,
-    "--max-turns",
-    String(config.maxTurns),
   ];
 
   if (config.allowedTools.length > 0) {
@@ -515,21 +513,21 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
         console.log(`[claude-adapter] sendMessage called for ${agentId}, taskId: ${taskId}`);
         const session = yield* getSessionOrFail(agentId);
 
-        // Budget checks
-        if (
-          session.config.maxTurns > 0 &&
-          session.turnCount >= session.config.maxTurns
-        ) {
-          return yield* Effect.fail(
-            new AgentBudgetExceededError({
-              agentId,
-              sessionId: session.claudeSessionId,
-              budgetType: "turns",
-              limit: session.config.maxTurns,
-              current: session.turnCount,
-            }),
-          );
-        }
+        // // Budget checks
+        // if (
+        //   session.config.maxTurns > 0 &&
+        //   session.turnCount >= session.config.maxTurns
+        // ) {
+        //   return yield* Effect.fail(
+        //     new AgentBudgetExceededError({
+        //       agentId,
+        //       sessionId: session.claudeSessionId,
+        //       budgetType: "turns",
+        //       limit: session.config.maxTurns,
+        //       current: session.turnCount,
+        //     }),
+        //   );
+        // }
 
         yield* emit({
           type: "agent.turn.started",

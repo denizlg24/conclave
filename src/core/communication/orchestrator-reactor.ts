@@ -16,7 +16,7 @@ const TASK_ROLE_MAP: Record<TaskType, AgentRole> = {
   decomposition: "pm",
   implementation: "developer",
   review: "reviewer",
-  testing: "reviewer",
+  testing: "tester",
 };
 
 function isOrchestrationEvent(event: BusEvent): event is OrchestrationEvent {
@@ -28,17 +28,17 @@ export function createOrchestratorReactor(deps: {
   readonly bus: EventBusShape;
   readonly receiptStore: ReceiptStoreShape;
   readonly agentService: AgentServiceShape;
+  readonly workingDirectory: string;
 }): Effect.Effect<Fiber.Fiber<void>, never, Scope.Scope> {
-  const { engine, bus, receiptStore, agentService } = deps;
+  const { engine, bus, receiptStore, agentService, workingDirectory } = deps;
 
   const tryAutoAssign = (taskId: TaskId, taskType: TaskType) =>
     Effect.gen(function* () {
       const role = TASK_ROLE_MAP[taskType];
-      const agents = yield* agentService.listAgents();
-      const match = agents.find((a) => a.role === role);
-      if (!match) {
-        yield* Effect.logWarning(
-          `[${REACTOR_NAME}] No agent with role '${role}' found for task '${taskId}' — skipping auto-assign`,
+      const agent = yield* agentService.findOrSpawnAgent(role, workingDirectory);
+      if (!agent) {
+        console.log(
+          `[${REACTOR_NAME}] No available agent for role '${role}' (task '${taskId}') — will retry when an agent frees up`,
         );
         return;
       }
@@ -47,7 +47,7 @@ export function createOrchestratorReactor(deps: {
         type: "task.assign",
         commandId: crypto.randomUUID() as CommandId,
         taskId,
-        agentId: match.agentId,
+        agentId: agent.agentId,
         agentRole: role,
         createdAt: new Date().toISOString(),
       });
@@ -74,8 +74,10 @@ export function createOrchestratorReactor(deps: {
         }
 
         case "task.status-updated": {
-          if (event.payload.status === "done") {
+          if (event.payload.status === "done" || event.payload.status === "failed") {
             const readModel = yield* engine.getReadModel();
+
+            // Retry tasks whose deps just got unblocked
             const unblockedPending = readModel.tasks.filter(
               (t) =>
                 t.status === "pending" &&
@@ -83,6 +85,21 @@ export function createOrchestratorReactor(deps: {
                 t.deps.includes(event.payload.taskId),
             );
             for (const task of unblockedPending) {
+              yield* tryAutoAssign(task.id, task.taskType);
+            }
+
+            // An agent just freed up — retry any unassigned pending tasks
+            // that previously couldn't be assigned due to capacity
+            const unassignedPending = readModel.tasks.filter(
+              (t) =>
+                t.status === "pending" &&
+                t.owner === null &&
+                !t.deps.some((depId) => {
+                  const dep = readModel.tasks.find((d) => d.id === depId);
+                  return dep && dep.status !== "done";
+                }),
+            );
+            for (const task of unassignedPending) {
               yield* tryAutoAssign(task.id, task.taskType);
             }
           }

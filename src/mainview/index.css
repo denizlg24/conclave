@@ -3,10 +3,14 @@
 @import "tw-animate-css";
 @plugin '@tailwindcss/typography';
 
-
 @custom-variant dark (&:is(.dark *));
 
+/* =========================================================================
+   CONCLAVE — Tactical RPG Theme
+   ========================================================================= */
+
 :root {
+  /* --- Core palette (warm earth / forest) --- */
   --background: #f9f8f6;
   --surface: #f1f3e0;
   --muted: #d2dcb6;
@@ -51,50 +55,34 @@
   --sidebar-ring: var(--accent-strong);
 
   --radius: 0.625rem;
-}
 
-@theme inline {
-  --breakpoint-xs: 426px;
+  /* --- RPG Theme Tokens --- */
+  --rpg-bg: #141a14;
+  --rpg-panel: #1a2119;
+  --rpg-panel-lighter: #222d21;
+  --rpg-border: #3a4a35;
+  --rpg-border-highlight: #5a6e52;
+  --rpg-text: #e8e4d9;
+  --rpg-text-dim: #8a9484;
+  --rpg-text-muted: #5a6652;
 
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-surface: var(--surface);
-  --color-border: var(--border);
-  --color-accent: var(--accent);
-  --color-accent-strong: var(--accent-strong);
-  --color-muted: var(--muted);
-  --font-inter: var(--font-inter);
-  --font-calistoga: var(--font-calistoga);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --rpg-gold: #c8a96e;
+  --rpg-gold-dim: #9a7d4a;
+  --rpg-sage: #a1bc98;
+  --rpg-sage-dim: #6b8a62;
+  --rpg-copper: #d4a373;
+  --rpg-copper-dim: #a07a52;
+  --rpg-terracotta: #e07a5f;
+  --rpg-terracotta-dim: #a85a45;
+  --rpg-sand: #f2cc8f;
+  --rpg-forest: #81b29a;
+  --rpg-forest-dark: #6a994e;
+  --rpg-danger: #c45c4a;
+  --rpg-danger-dim: #8a3a2e;
+
+  /* --- Fonts --- */
+  --font-display: 'Silkscreen', cursive;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 .dark {
@@ -145,6 +133,346 @@
   --sidebar-ring: #a1bc98;
 }
 
+@theme inline {
+  --breakpoint-xs: 426px;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-muted: var(--muted);
+  --font-inter: var(--font-inter);
+  --font-calistoga: var(--font-calistoga);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* =========================================================================
+   Base
+   ========================================================================= */
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  html, body, #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--rpg-bg);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--rpg-border);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--rpg-border-highlight);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--rpg-border) var(--rpg-bg);
+  }
+
+  html {
+    overflow: hidden;
+  }
+}
+
+/* =========================================================================
+   RPG Panel System
+   ========================================================================= */
+
+.rpg-panel {
+  background: var(--rpg-panel);
+  border: 1px solid var(--rpg-border);
+  box-shadow:
+    inset 0 0 0 1px var(--rpg-panel-lighter),
+    0 4px 20px rgba(0, 0, 0, 0.5);
+  position: relative;
+}
+
+.rpg-panel::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border: 1px solid var(--rpg-border);
+  pointer-events: none;
+  opacity: 0.3;
+}
+
+.rpg-panel-header {
+  font-family: var(--font-display);
+  color: var(--rpg-gold);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rpg-border);
+  background: linear-gradient(180deg, rgba(200, 169, 110, 0.08) 0%, transparent 100%);
+}
+
+.rpg-font {
+  font-family: var(--font-display);
+}
+
+.rpg-mono {
+  font-family: var(--font-mono);
+}
+
+/* =========================================================================
+   RPG Action Bar (Bottom)
+   ========================================================================= */
+
+.rpg-action-bar {
+  background: linear-gradient(0deg, var(--rpg-bg) 0%, var(--rpg-panel) 40%, var(--rpg-panel-lighter) 100%);
+  border-top: 1px solid var(--rpg-border-highlight);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.rpg-action-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--rpg-text-dim);
+  background: var(--rpg-panel);
+  border: 1px solid var(--rpg-border);
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rpg-action-btn:hover {
+  color: var(--rpg-text);
+  background: var(--rpg-panel-lighter);
+  border-color: var(--rpg-border-highlight);
+}
+
+.rpg-action-btn.active {
+  color: var(--rpg-gold);
+  background: var(--rpg-panel-lighter);
+  border-color: var(--rpg-gold-dim);
+  box-shadow: 0 0 8px rgba(200, 169, 110, 0.15);
+}
+
+.rpg-action-btn .hotkey {
+  font-size: 10px;
+  color: var(--rpg-text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 5px;
+  border: 1px solid var(--rpg-border);
+  font-family: var(--font-mono);
+}
+
+.rpg-action-btn:hover .hotkey {
+  color: var(--rpg-gold-dim);
+  border-color: var(--rpg-gold-dim);
+}
+
+.rpg-action-btn.primary-action {
+  background: linear-gradient(180deg, rgba(200, 169, 110, 0.15) 0%, rgba(200, 169, 110, 0.05) 100%);
+  border-color: var(--rpg-gold-dim);
+  color: var(--rpg-gold);
+}
+
+.rpg-action-btn.primary-action:hover {
+  background: linear-gradient(180deg, rgba(200, 169, 110, 0.25) 0%, rgba(200, 169, 110, 0.1) 100%);
+  border-color: var(--rpg-gold);
+  box-shadow: 0 0 12px rgba(200, 169, 110, 0.2);
+}
+
+/* =========================================================================
+   Toast Notifications
+   ========================================================================= */
+
+.rpg-toast {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--rpg-panel);
+  border: 1px solid var(--rpg-border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  color: var(--rpg-text);
+  padding: 8px 14px;
+  animation: toast-in 0.3s ease-out, toast-out 0.3s ease-in 3.7s forwards;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-8px); }
+}
+
+/* =========================================================================
+   Agent Animations
+   ========================================================================= */
+
+@keyframes working-pulse {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 0px transparent); }
+  50% { filter: brightness(1.15) drop-shadow(0 0 6px rgba(161, 188, 152, 0.4)); }
+}
+
+@keyframes meeting-glow {
+  0%, 100% { filter: drop-shadow(0 0 3px rgba(200, 169, 110, 0.3)); }
+  50% { filter: drop-shadow(0 0 8px rgba(200, 169, 110, 0.5)); }
+}
+
+@keyframes idle-bob {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-1.5px); }
+}
+
+.agent-working {
+  animation: working-pulse 2s ease-in-out infinite;
+}
+
+.agent-meeting {
+  animation: meeting-glow 1.5s ease-in-out infinite;
+}
+
+.agent-idle {
+  animation: idle-bob 3s ease-in-out infinite;
+}
+
+/* =========================================================================
+   Log Entries
+   ========================================================================= */
+
+.log-entry {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(58, 74, 53, 0.3);
+  transition: background 0.15s;
+}
+
+.log-entry:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.log-output {
+  border-left: 2px solid var(--rpg-sage-dim);
+  padding-left: 8px;
+  margin: 3px 0;
+  color: var(--rpg-text);
+  opacity: 0.85;
+}
+
+.log-tool {
+  border-left: 2px solid var(--rpg-sand);
+  padding-left: 8px;
+  margin: 3px 0;
+}
+
+.log-error {
+  border-left: 2px solid var(--rpg-danger);
+  padding-left: 8px;
+  margin: 3px 0;
+  color: var(--rpg-danger);
+}
+
+/* =========================================================================
+   Approval Badge
+   ========================================================================= */
+
+@keyframes approval-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(200, 169, 110, 0.3); }
+  50% { box-shadow: 0 0 12px rgba(200, 169, 110, 0.6); }
+}
+
+.approval-badge {
+  animation: approval-pulse 2s ease-in-out infinite;
+}
+
+/* =========================================================================
+   Quest Progress Bar
+   ========================================================================= */
+
+.quest-progress {
+  height: 3px;
+  background: var(--rpg-border);
+  overflow: hidden;
+  border-radius: 1.5px;
+}
+
+.quest-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--rpg-sage-dim), var(--rpg-sage));
+  transition: width 0.5s ease;
+  border-radius: 1.5px;
+}
+
+/* =========================================================================
+   Active task ticker
+   ========================================================================= */
+
+.ticker-item {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 10px;
+  white-space: nowrap;
+  border: 1px solid;
+  transition: all 0.15s ease;
+}
+
+/* =========================================================================
+   Editor / code highlight overrides (keep original)
+   ========================================================================= */
+
 @keyframes cursor-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
@@ -176,47 +504,6 @@
 
 .cursors-hidden .editor-cursor {
   opacity: 0;
-}
-
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
-
-  /* Custom scrollbar styling */
-  ::-webkit-scrollbar {
-    width: 12px;
-    height: 12px;
-  }
-
-  ::-webkit-scrollbar-track {
-    @apply bg-background;
-    border-radius: 6px;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    @apply bg-muted hover:bg-accent;
-    border-radius: 6px;
-    border: 2px solid transparent;
-    background-clip: padding-box;
-  }
-
-  ::-webkit-scrollbar-thumb:active {
-    @apply bg-accent-strong;
-  }
-
-  /* Firefox scrollbar styling */
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: theme("colors.muted") theme("colors.background");
-  }
-
-  html {
-    overflow: hidden;
-  }
 }
 
 .hljs {

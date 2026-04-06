@@ -1,6 +1,10 @@
-// ---------------------------------------------------------------------------
-// Serialized domain types for RPC transport (plain types, no Effect brands)
-// ---------------------------------------------------------------------------
+export type SerializedProject = {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  createdAt: string;
+};
 
 export type SerializedTask = {
   id: string;
@@ -53,13 +57,72 @@ export type SerializedReadModel = {
   updatedAt: string;
 };
 
-// ---------------------------------------------------------------------------
-// RPC Schema — conforms to ElectrobunRPCSchema
-// ---------------------------------------------------------------------------
+export type SerializedAgentInfo = {
+  agentId: string;
+  role: string;
+  sessionId: string;
+};
+
+export type SerializedAgentRoster = {
+  agents: SerializedAgentInfo[];
+};
+
+export type SerializedAgentEvent = {
+  type: string;
+  agentId: string;
+  sessionId: string;
+  occurredAt: string;
+  content?: string;
+  toolName?: string;
+  toolInput?: unknown;
+  taskId?: string | null;
+  error?: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+  costUsd?: number;
+  durationMs?: number;
+};
 
 export type ConclaveRPCSchema = {
   bun: {
     requests: {
+      listProjects: {
+        params: Record<string, never>;
+        response: SerializedProject[];
+      };
+      createProject: {
+        params: { name: string; description: string; path: string };
+        response: SerializedProject;
+      };
+      browseForDirectory: {
+        params: Record<string, never>;
+        response: string | null;
+      };
+      openDirectory: {
+        params: { path: string };
+        response: SerializedProject;
+      };
+      loadProject: {
+        params: { projectId: string };
+        response: { success: boolean };
+      };
+      getActiveProject: {
+        params: Record<string, never>;
+        response: SerializedProject | null;
+      };
+
+      getAgentRoster: {
+        params: Record<string, never>;
+        response: SerializedAgentRoster;
+      };
+
+      sendCommand: {
+        params: { message: string };
+        response: { taskId: string; meetingId: string };
+      };
+
       getState: {
         params: Record<string, never>;
         response: SerializedReadModel;
@@ -109,6 +172,9 @@ export type ConclaveRPCSchema = {
     messages: {
       onStateChanged: SerializedReadModel;
       onEvent: SerializedEvent;
+      onProjectLoaded: SerializedProject;
+      onAgentEvent: SerializedAgentEvent;
+      onAgentRoster: SerializedAgentRoster;
     };
   };
 };

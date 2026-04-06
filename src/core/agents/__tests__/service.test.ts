@@ -506,7 +506,7 @@ describe("createAgentService", () => {
 });
 
 describe("default role configurations", () => {
-  test("pm role has restricted tools (no code writing)", async () => {
+  test("pm role has planning tools but no code modification tools", async () => {
     const sessions = new Map<AgentId, AgentSession>();
     const adapter = createMockAdapter(sessions);
     const service = createAgentService(adapter);
@@ -515,7 +515,10 @@ describe("default role configurations", () => {
       service.startAgent(makeAgentId("pm"), "pm", "/tmp"),
     );
 
-    expect(session.config.allowedTools).not.toContain("Write");
+    // PM can write planning documents to .conclave/planning/
+    expect(session.config.allowedTools).toContain("Write");
+    expect(session.config.allowedTools).toContain("Read");
+    // PM cannot edit existing code or run commands
     expect(session.config.allowedTools).not.toContain("Edit");
     expect(session.config.allowedTools).not.toContain("Bash");
   });
@@ -550,7 +553,7 @@ describe("default role configurations", () => {
     expect(session.config.allowedTools).not.toContain("Edit");
   });
 
-  test("each role has unique turn limits appropriate to their function", async () => {
+  test("each role has appropriate turn limits for their complexity", async () => {
     const sessions = new Map<AgentId, AgentSession>();
     const adapter = createMockAdapter(sessions);
     const service = createAgentService(adapter);
@@ -565,7 +568,9 @@ describe("default role configurations", () => {
       service.startAgent(makeAgentId("reviewer"), "reviewer", "/tmp"),
     );
 
-    expect(devSession.config.maxTurns).toBeGreaterThan(pmSession.config.maxTurns);
-    expect(pmSession.config.maxTurns).toBeGreaterThan(reviewerSession.config.maxTurns);
+    // Developer needs most turns for implementation work
+    expect(devSession.config.maxTurns).toBeGreaterThan(reviewerSession.config.maxTurns);
+    // Reviewer needs more turns than PM for thorough code review
+    expect(reviewerSession.config.maxTurns).toBeGreaterThan(pmSession.config.maxTurns);
   });
 });

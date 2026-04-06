@@ -1,25 +1,46 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useConclave } from "../hooks/use-conclave";
-import { CreateTaskDialog } from "./CreateTaskDialog";
+import { CommandBar } from "./CommandBar";
 
 const STATUS_COLORS: Record<string, string> = {
-  proposed: "#a78bfa",
-  pending: "#facc15",
-  assigned: "#60a5fa",
-  in_progress: "#22d3ee",
-  review: "#fb923c",
-  done: "#4ade80",
-  failed: "#f87171",
-  blocked: "#9ca3af",
-  rejected: "#fca5a5",
+  proposed: "#c8a96e",
+  pending: "#f2cc8f",
+  assigned: "#a1bc98",
+  in_progress: "#81b29a",
+  review: "#e07a5f",
+  done: "#6a994e",
+  failed: "#c45c4a",
+  blocked: "#6b7a65",
+  rejected: "#d4736a",
 };
 
-type Panel = "tasks" | "events" | "approvals" | null;
+const STATUS_ICONS: Record<string, string> = {
+  proposed: "\u25cb",
+  pending: "\u25d4",
+  assigned: "\u25d1",
+  in_progress: "\u25b6",
+  review: "\u25c6",
+  done: "\u2714",
+  failed: "\u2718",
+  blocked: "\u25a0",
+  rejected: "\u2718",
+};
+
+type Panel = "quests" | "journal" | "party" | "approvals" | null;
 
 export function GameHUD() {
-  const { readModel, events, connected, approveProposedTasks } = useConclave();
+  const {
+    readModel,
+    events,
+    agentEvents,
+    connected,
+    activeProject,
+    approveProposedTasks,
+  } = useConclave();
   const [activePanel, setActivePanel] = useState<Panel>(null);
-  const [showCreateTask, setShowCreateTask] = useState(false);
+  const [showCommand, setShowCommand] = useState(false);
+  const logRef = useRef<HTMLDivElement>(null);
+  const partyLogRef = useRef<HTMLDivElement>(null);
 
   const tasks = readModel?.tasks ?? [];
   const meetings = readModel?.meetings ?? [];
@@ -27,235 +48,577 @@ export function GameHUD() {
   const activeTasks = tasks.filter((t) =>
     ["assigned", "in_progress", "review"].includes(t.status),
   );
+  const doneTasks = tasks.filter((t) => t.status === "done");
 
-  const togglePanel = (panel: Panel) =>
-    setActivePanel((prev) => (prev === panel ? null : panel));
+  useEffect(() => {
+    if (logRef.current && activePanel === "journal") {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [events.length, activePanel]);
+
+  useEffect(() => {
+    if (partyLogRef.current && activePanel === "party") {
+      partyLogRef.current.scrollTop = partyLogRef.current.scrollHeight;
+    }
+  }, [agentEvents.length, activePanel]);
+
+  const togglePanel = useCallback(
+    (panel: Panel) =>
+      setActivePanel((prev) => (prev === panel ? null : panel)),
+    [],
+  );
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      )
+        return;
+
+      switch (e.key.toLowerCase()) {
+        case "q":
+          togglePanel("quests");
+          break;
+        case "j":
+          togglePanel("journal");
+          break;
+        case "p":
+          togglePanel("party");
+          break;
+        case " ":
+          e.preventDefault();
+          setShowCommand((prev) => !prev);
+          break;
+        case "escape":
+          setActivePanel(null);
+          setShowCommand(false);
+          break;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [togglePanel]);
+
+  const relativeTime = (iso: string) => {
+    const diff = Date.now() - new Date(iso).getTime();
+    if (diff < 60_000) return `${Math.floor(diff / 1000)}s`;
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+    return `${Math.floor(diff / 3_600_000)}h`;
+  };
 
   return (
     <>
-      {/* Top bar — status indicators */}
-      <div className="absolute top-0 left-0 right-0 flex items-center gap-3 px-3 py-1.5 pointer-events-auto"
-        style={{ fontFamily: "monospace" }}
+      <div
+        className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-2 pointer-events-auto"
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(14, 18, 14, 0.95) 0%, rgba(14, 18, 14, 0.85) 60%, rgba(14, 18, 14, 0.4) 90%, transparent 100%)",
+        }}
       >
-        <span className="flex items-center gap-1.5 text-[10px] text-white/70 bg-black/50 px-2 py-0.5 rounded-sm border border-white/10">
-          <span className={`w-1.5 h-1.5 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`} />
-          {connected ? "ONLINE" : "OFFLINE"}
-        </span>
-        <span className="text-[10px] text-white/50 bg-black/50 px-2 py-0.5 rounded-sm border border-white/10">
-          SEQ:{readModel?.snapshotSequence ?? 0}
-        </span>
-        {proposedTasks.length > 0 && (
-          <button
-            onClick={() => togglePanel("approvals")}
-            className="text-[10px] text-violet-300 bg-violet-900/60 px-2 py-0.5 rounded-sm border border-violet-500/40 animate-pulse cursor-pointer"
+        <div className="flex items-center gap-3">
+          <span
+            className="rpg-font text-[14px] tracking-widest"
+            style={{ color: "var(--rpg-gold)" }}
           >
-            {proposedTasks.length} AWAITING APPROVAL
-          </button>
-        )}
-      </div>
-
-      {/* Right side — action buttons */}
-      <div className="absolute top-12 right-3 flex flex-col gap-2 pointer-events-auto">
-        <HUDButton label="TASKS" count={tasks.length} onClick={() => togglePanel("tasks")} active={activePanel === "tasks"} />
-        <HUDButton label="LOG" count={events.length} onClick={() => togglePanel("events")} active={activePanel === "events"} />
-        <HUDButton
-          label="+ NEW"
-          onClick={() => setShowCreateTask(true)}
-          color="bg-blue-900/70 border-blue-400/40 text-blue-300"
-        />
-      </div>
-
-      {/* Bottom HUD — active tasks ticker */}
-      <div className="absolute bottom-0 left-0 right-0 pointer-events-auto">
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-black/60 border-t border-white/10"
-          style={{ fontFamily: "monospace" }}
-        >
-          <span className="text-[10px] text-white/40 uppercase shrink-0">Active:</span>
-          {activeTasks.length === 0 ? (
-            <span className="text-[10px] text-white/30 italic">No active tasks</span>
-          ) : (
-            <div className="flex gap-2 overflow-x-auto">
-              {activeTasks.map((t) => (
-                <span
-                  key={t.id}
-                  className="text-[10px] px-2 py-0.5 rounded-sm border shrink-0"
-                  style={{
-                    color: STATUS_COLORS[t.status] ?? "#fff",
-                    borderColor: `${STATUS_COLORS[t.status] ?? "#fff"}44`,
-                    backgroundColor: `${STATUS_COLORS[t.status] ?? "#fff"}15`,
-                  }}
-                >
-                  [{t.taskType.slice(0, 3).toUpperCase()}] {t.title.slice(0, 30)}
-                </span>
-              ))}
-            </div>
+            CONCLAVE
+          </span>
+          {activeProject && (
+            <span
+              className="rpg-mono text-[11px]"
+              style={{
+                color: "var(--rpg-text-dim)",
+                borderLeft: "1px solid var(--rpg-border)",
+                paddingLeft: 10,
+              }}
+            >
+              {activeProject.name}
+            </span>
           )}
-          <div className="ml-auto flex gap-3 shrink-0">
-            {Object.entries(
-              tasks.reduce<Record<string, number>>((acc, t) => {
-                acc[t.status] = (acc[t.status] ?? 0) + 1;
-                return acc;
-              }, {}),
-            ).map(([status, count]) => (
+        </div>
+        <div className="flex items-center gap-3">
+          {proposedTasks.length > 0 && (
+            <button
+              onClick={() => togglePanel("approvals")}
+              className="approval-badge rpg-mono text-[11px] px-2.5 py-1 cursor-pointer"
+              style={{
+                background: "rgba(200, 169, 110, 0.15)",
+                border: "1px solid var(--rpg-gold-dim)",
+                color: "var(--rpg-gold)",
+              }}
+            >
+              {proposedTasks.length} AWAITING DECREE
+            </button>
+          )}
+          <span
+            className="flex items-center gap-1.5 rpg-mono text-[10px]"
+            style={{ color: "var(--rpg-text-dim)" }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{
+                background: connected
+                  ? "var(--rpg-sage)"
+                  : "var(--rpg-danger)",
+              }}
+            />
+            CYCLE {readModel?.snapshotSequence ?? 0}
+          </span>
+        </div>
+      </div>
+
+      {activeTasks.length > 0 && (
+        <div
+          className="absolute left-0 right-0 pointer-events-none flex justify-center"
+          style={{ bottom: 50 }}
+        >
+          <div className="flex gap-1.5 px-3 py-1">
+            {activeTasks.slice(0, 5).map((t) => (
               <span
-                key={status}
-                className="text-[10px]"
-                style={{ color: STATUS_COLORS[status] ?? "#888" }}
+                key={t.id}
+                className="ticker-item"
+                style={{
+                  color: STATUS_COLORS[t.status] ?? "var(--rpg-text)",
+                  borderColor: `${STATUS_COLORS[t.status] ?? "var(--rpg-border)"}55`,
+                  background: `rgba(14, 18, 14, 0.88)`,
+                }}
               >
-                {count} {status.replace("_", " ")}
+                {STATUS_ICONS[t.status] ?? "\u25cb"}{" "}
+                {t.title.slice(0, 25)}
+                {t.title.length > 25 ? "\u2026" : ""}
               </span>
             ))}
           </div>
         </div>
+      )}
+
+      <div className="absolute bottom-0 left-0 right-0 rpg-action-bar pointer-events-auto">
+        <div className="flex items-center justify-center gap-2 px-4 py-2">
+          <ActionButton
+            label="QUESTS"
+            hotkey="Q"
+            active={activePanel === "quests"}
+            count={tasks.length}
+            onClick={() => togglePanel("quests")}
+          />
+          <ActionButton
+            label="JOURNAL"
+            hotkey="J"
+            active={activePanel === "journal"}
+            count={events.length}
+            onClick={() => togglePanel("journal")}
+          />
+          <ActionButton
+            label="PARTY"
+            hotkey="P"
+            active={activePanel === "party"}
+            count={agentEvents.length}
+            onClick={() => togglePanel("party")}
+          />
+
+          <div
+            className="w-px h-6 mx-1"
+            style={{ background: "var(--rpg-border)" }}
+          />
+
+          <button
+            onClick={() => setShowCommand(true)}
+            className="rpg-action-btn primary-action"
+          >
+            <span className="hotkey">SPACE</span>
+            COMMAND
+          </button>
+
+          <div
+            className="w-px h-6 mx-1"
+            style={{ background: "var(--rpg-border)" }}
+          />
+          <div
+            className="flex items-center gap-3 rpg-mono text-[10px]"
+            style={{ color: "var(--rpg-text-dim)" }}
+          >
+            <span>
+              <span style={{ color: "var(--rpg-forest-dark)" }}>
+                {doneTasks.length}
+              </span>{" "}
+              done
+            </span>
+            <span>
+              <span style={{ color: "var(--rpg-forest)" }}>
+                {activeTasks.length}
+              </span>{" "}
+              active
+            </span>
+            <span>
+              <span style={{ color: "var(--rpg-text-dim)" }}>
+                {tasks.length}
+              </span>{" "}
+              total
+            </span>
+          </div>
+        </div>
       </div>
 
-      {/* Slide-out panels */}
-      {activePanel === "tasks" && (
-        <SlidePanel title="TASK QUEUE" onClose={() => setActivePanel(null)}>
+      {activePanel === "quests" && (
+        <RPGPanel title="QUEST LOG" onClose={() => setActivePanel(null)}>
           {tasks.length === 0 ? (
-            <p className="text-white/30 text-[11px] text-center py-4">Empty</p>
+            <EmptyState>No quests assigned</EmptyState>
           ) : (
-            tasks.map((t) => (
-              <div
-                key={t.id}
-                className="flex items-center gap-2 py-1 px-2 border-b border-white/5"
-              >
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: STATUS_COLORS[t.status] }}
+            <div className="flex flex-col">
+              {activeTasks.length > 0 && (
+                <SectionHeader label="Active" count={activeTasks.length} />
+              )}
+              {activeTasks.map((t) => (
+                <QuestEntry key={t.id} task={t} />
+              ))}
+
+              {proposedTasks.length > 0 && (
+                <SectionHeader
+                  label="Proposed"
+                  count={proposedTasks.length}
                 />
-                <span className="text-[11px] text-white/80 truncate flex-1">
-                  {t.title}
+              )}
+              {proposedTasks.map((t) => (
+                <QuestEntry key={t.id} task={t} />
+              ))}
+
+              {doneTasks.length > 0 && (
+                <SectionHeader label="Complete" count={doneTasks.length} />
+              )}
+              {doneTasks.map((t) => (
+                <QuestEntry key={t.id} task={t} />
+              ))}
+
+              {tasks.filter(
+                (t) =>
+                  !["assigned", "in_progress", "review", "proposed", "done"].includes(t.status),
+              ).length > 0 && <SectionHeader label="Other" />}
+              {tasks
+                .filter(
+                  (t) =>
+                    !["assigned", "in_progress", "review", "proposed", "done"].includes(t.status),
+                )
+                .map((t) => (
+                  <QuestEntry key={t.id} task={t} />
+                ))}
+            </div>
+          )}
+
+          {tasks.length > 0 && (
+            <div className="px-3 py-2 border-t" style={{ borderColor: "var(--rpg-border)" }}>
+              <div className="flex items-center justify-between mb-1">
+                <span
+                  className="rpg-mono text-[10px]"
+                  style={{ color: "var(--rpg-text-muted)" }}
+                >
+                  Overall Progress
                 </span>
-                <span className="text-[9px] text-white/30 uppercase shrink-0">
-                  {t.status}
+                <span
+                  className="rpg-mono text-[10px]"
+                  style={{ color: "var(--rpg-sage)" }}
+                >
+                  {doneTasks.length}/{tasks.length}
                 </span>
               </div>
-            ))
-          )}
-        </SlidePanel>
-      )}
-
-      {activePanel === "events" && (
-        <SlidePanel title="EVENT LOG" onClose={() => setActivePanel(null)}>
-          {events.length === 0 ? (
-            <p className="text-white/30 text-[11px] text-center py-4">No events</p>
-          ) : (
-            [...events].reverse().slice(0, 50).map((e) => (
-              <div key={e.eventId} className="py-0.5 px-2 border-b border-white/5">
-                <div className="flex items-center gap-2">
-                  <span className="text-[9px] text-white/20 tabular-nums">#{e.sequence}</span>
-                  <span className="text-[10px] text-cyan-400/80">{e.type}</span>
-                  <span className="text-[9px] text-white/20 ml-auto">
-                    {new Date(e.occurredAt).toLocaleTimeString()}
-                  </span>
-                </div>
+              <div className="quest-progress">
+                <div
+                  className="quest-progress-fill"
+                  style={{
+                    width: `${(doneTasks.length / tasks.length) * 100}%`,
+                  }}
+                />
               </div>
-            ))
+            </div>
           )}
-        </SlidePanel>
+        </RPGPanel>
       )}
 
-      {activePanel === "approvals" && (
-        <SlidePanel title="APPROVAL QUEUE" onClose={() => setActivePanel(null)}>
-          {proposedTasks.length === 0 ? (
-            <p className="text-white/30 text-[11px] text-center py-4">Nothing to approve</p>
-          ) : (
-            <>
-              {proposedTasks.map((t) => {
-                const meetingId = (t.input as Record<string, unknown> | null)
-                  ?.proposedByMeeting as string | undefined;
-                const meeting = meetingId
-                  ? meetings.find((m) => m.id === meetingId)
-                  : undefined;
-                return (
-                  <div key={t.id} className="py-2 px-2 border-b border-white/5 space-y-1">
+      {activePanel === "journal" && (
+        <RPGPanel title="EVENT JOURNAL" onClose={() => setActivePanel(null)}>
+          <div ref={logRef} className="flex-1 overflow-y-auto">
+            {events.length === 0 ? (
+              <EmptyState>No events recorded</EmptyState>
+            ) : (
+              [...events]
+                .reverse()
+                .slice(0, 80)
+                .map((e) => (
+                  <div key={e.eventId} className="log-entry">
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-violet-400 uppercase">{t.taskType}</span>
-                      <span className="text-[11px] text-white/80">{t.title}</span>
-                    </div>
-                    {meeting && (
-                      <span className="text-[9px] text-white/30">
-                        from {meeting.meetingType} meeting
+                      <span
+                        className="rpg-mono text-[10px] tabular-nums"
+                        style={{ color: "var(--rpg-text-muted)" }}
+                      >
+                        #{e.sequence}
                       </span>
-                    )}
-                    {meetingId && (
-                      <div className="flex gap-1 pt-1">
-                        <button
-                          onClick={() =>
-                            approveProposedTasks({
-                              meetingId,
-                              approvedTaskIds: [t.id],
-                              rejectedTaskIds: [],
-                            })
-                          }
-                          className="text-[10px] px-2 py-0.5 bg-green-800/60 text-green-300 border border-green-500/30 rounded-sm hover:bg-green-700/60"
-                        >
-                          APPROVE
-                        </button>
-                        <button
-                          onClick={() =>
-                            approveProposedTasks({
-                              meetingId,
-                              approvedTaskIds: [],
-                              rejectedTaskIds: [t.id],
-                            })
-                          }
-                          className="text-[10px] px-2 py-0.5 bg-red-800/60 text-red-300 border border-red-500/30 rounded-sm hover:bg-red-700/60"
-                        >
-                          REJECT
-                        </button>
+                      <EventBadge type={e.type} />
+                      <span
+                        className="rpg-mono text-[10px] ml-auto"
+                        style={{ color: "var(--rpg-text-muted)" }}
+                      >
+                        {relativeTime(e.occurredAt)} ago
+                      </span>
+                    </div>
+                    {e.payload && Object.keys(e.payload).length > 0 && (
+                      <div
+                        className="rpg-mono text-[10px] mt-0.5 truncate"
+                        style={{ color: "var(--rpg-text-dim)" }}
+                      >
+                        {formatPayload(e.payload)}
                       </div>
                     )}
                   </div>
-                );
-              })}
-            </>
-          )}
-        </SlidePanel>
+                ))
+            )}
+          </div>
+        </RPGPanel>
       )}
 
-      <CreateTaskDialog open={showCreateTask} onClose={() => setShowCreateTask(false)} />
+      {activePanel === "party" && (
+        <RPGPanel
+          title="PARTY ACTIVITY"
+          onClose={() => setActivePanel(null)}
+        >
+          <div ref={partyLogRef} className="flex-1 overflow-y-auto">
+            {agentEvents.length === 0 ? (
+              <EmptyState>No party activity</EmptyState>
+            ) : (
+              [...agentEvents]
+                .reverse()
+                .slice(0, 120)
+                .map((e, i) => {
+                  const agentLabel = e.agentId
+                    .replace("agent-", "")
+                    .toUpperCase();
+                  return (
+                    <div
+                      key={`${e.occurredAt}-${i}`}
+                      className="log-entry"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="rpg-mono text-[10px]"
+                          style={{ color: "var(--rpg-text-muted)" }}
+                        >
+                          {relativeTime(e.occurredAt)}
+                        </span>
+                        <span
+                          className="rpg-mono text-[10px] font-medium"
+                          style={{ color: "var(--rpg-gold)" }}
+                        >
+                          {agentLabel}
+                        </span>
+                        <AgentEventBadge type={e.type} />
+                      </div>
+
+                      {e.type === "agent.output.produced" && e.content && (
+                        <div className="log-output">
+                          <p className="rpg-mono text-[10px] whitespace-pre-wrap break-words">
+                            {e.content.slice(0, 400)}
+                            {(e.content.length ?? 0) > 400 ? "\u2026" : ""}
+                          </p>
+                        </div>
+                      )}
+
+                      {e.type === "agent.tool.invoked" && e.toolName && (
+                        <div className="log-tool">
+                          <span
+                            className="rpg-mono text-[10px]"
+                            style={{ color: "var(--rpg-sand)" }}
+                          >
+                            {e.toolName}
+                          </span>
+                        </div>
+                      )}
+
+                      {e.type === "agent.error" && e.error && (
+                        <div className="log-error">
+                          <p className="rpg-mono text-[10px]">
+                            {e.error.slice(0, 200)}
+                          </p>
+                        </div>
+                      )}
+
+                      {e.type === "agent.turn.completed" && (
+                        <div className="flex gap-3 mt-0.5">
+                          {e.costUsd !== undefined && (
+                            <span
+                              className="rpg-mono text-[10px]"
+                              style={{ color: "var(--rpg-text-muted)" }}
+                            >
+                              ${e.costUsd.toFixed(4)}
+                            </span>
+                          )}
+                          {e.durationMs !== undefined && (
+                            <span
+                              className="rpg-mono text-[10px]"
+                              style={{ color: "var(--rpg-text-muted)" }}
+                            >
+                              {(e.durationMs / 1000).toFixed(1)}s
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        </RPGPanel>
+      )}
+
+      {activePanel === "approvals" && (
+        <RPGPanel
+          title="PENDING DECREES"
+          onClose={() => setActivePanel(null)}
+        >
+          {proposedTasks.length === 0 ? (
+            <EmptyState>No decrees pending</EmptyState>
+          ) : (
+            proposedTasks.map((t) => {
+              const meetingId = (t.input as Record<string, unknown> | null)
+                ?.proposedByMeeting as string | undefined;
+              const meeting = meetingId
+                ? meetings.find((m) => m.id === meetingId)
+                : undefined;
+              return (
+                <div
+                  key={t.id}
+                  className="px-3 py-3 space-y-2"
+                  style={{
+                    borderBottom: "1px solid var(--rpg-border)",
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="rpg-mono text-[10px] uppercase"
+                      style={{ color: "var(--rpg-copper)" }}
+                    >
+                      {t.taskType}
+                    </span>
+                    <span
+                      className="rpg-mono text-[11px]"
+                      style={{ color: "var(--rpg-text)" }}
+                    >
+                      {t.title}
+                    </span>
+                  </div>
+                  {t.description && (
+                    <p
+                      className="rpg-mono text-[10px]"
+                      style={{ color: "var(--rpg-text-dim)" }}
+                    >
+                      {t.description.slice(0, 150)}
+                      {t.description.length > 150 ? "\u2026" : ""}
+                    </p>
+                  )}
+                  {meeting && (
+                    <span
+                      className="rpg-mono text-[10px]"
+                      style={{ color: "var(--rpg-text-muted)" }}
+                    >
+                      Proposed during {meeting.meetingType} council
+                    </span>
+                  )}
+                  {meetingId && (
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() =>
+                          approveProposedTasks({
+                            meetingId,
+                            approvedTaskIds: [t.id],
+                            rejectedTaskIds: [],
+                          })
+                        }
+                        className="rpg-mono text-[10px] px-3 py-1 cursor-pointer transition-all"
+                        style={{
+                          background: "rgba(106, 153, 78, 0.2)",
+                          border: "1px solid rgba(106, 153, 78, 0.4)",
+                          color: "#6a994e",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "rgba(106, 153, 78, 0.35)";
+                          e.currentTarget.style.borderColor = "#6a994e";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "rgba(106, 153, 78, 0.2)";
+                          e.currentTarget.style.borderColor = "rgba(106, 153, 78, 0.4)";
+                        }}
+                      >
+                        APPROVE
+                      </button>
+                      <button
+                        onClick={() =>
+                          approveProposedTasks({
+                            meetingId,
+                            approvedTaskIds: [],
+                            rejectedTaskIds: [t.id],
+                          })
+                        }
+                        className="rpg-mono text-[10px] px-3 py-1 cursor-pointer transition-all"
+                        style={{
+                          background: "rgba(196, 92, 74, 0.15)",
+                          border: "1px solid rgba(196, 92, 74, 0.3)",
+                          color: "#c45c4a",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "rgba(196, 92, 74, 0.3)";
+                          e.currentTarget.style.borderColor = "#c45c4a";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "rgba(196, 92, 74, 0.15)";
+                          e.currentTarget.style.borderColor = "rgba(196, 92, 74, 0.3)";
+                        }}
+                      >
+                        REJECT
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </RPGPanel>
+      )}
+
+      <CommandBar
+        open={showCommand}
+        onClose={() => setShowCommand(false)}
+      />
     </>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-function HUDButton({
+function ActionButton({
   label,
+  hotkey,
   count,
   onClick,
   active,
-  color,
 }: {
   label: string;
+  hotkey: string;
   count?: number;
   onClick: () => void;
   active?: boolean;
-  color?: string;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`text-[10px] px-2.5 py-1 rounded-sm border cursor-pointer transition-colors ${
-        color ?? (active
-          ? "bg-white/15 border-white/30 text-white"
-          : "bg-black/50 border-white/10 text-white/60 hover:bg-black/70 hover:text-white/80")
-      }`}
-      style={{ fontFamily: "monospace" }}
+      className={`rpg-action-btn ${active ? "active" : ""}`}
     >
+      <span className="hotkey">{hotkey}</span>
       {label}
       {count !== undefined && (
-        <span className="ml-1.5 opacity-50">{count}</span>
+        <span style={{ opacity: 0.4, fontSize: 9 }}>{count}</span>
       )}
     </button>
   );
 }
 
-function SlidePanel({
+function RPGPanel({
   title,
   onClose,
   children,
@@ -265,19 +628,170 @@ function SlidePanel({
   children: React.ReactNode;
 }) {
   return (
-    <div className="absolute top-10 right-14 bottom-8 w-72 pointer-events-auto flex flex-col bg-black/80 border border-white/10 rounded-sm overflow-hidden backdrop-blur-sm">
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 bg-black/40">
-        <span className="text-[11px] text-white/60 font-bold tracking-wider" style={{ fontFamily: "monospace" }}>
-          {title}
-        </span>
+    <div
+      className="absolute top-10 left-4 w-80 pointer-events-auto flex flex-col rpg-panel overflow-hidden"
+      style={{ bottom: 56, maxHeight: "calc(var(--app-height, 100%) - 70px)" }}
+    >
+      <div className="rpg-panel-header flex items-center justify-between">
+        <span>{title}</span>
         <button
           onClick={onClose}
-          className="text-white/30 hover:text-white/60 text-sm leading-none"
+          className="cursor-pointer transition-colors"
+          style={{ color: "var(--rpg-text-muted)" }}
+          onMouseEnter={(e) =>
+            (e.currentTarget.style.color = "var(--rpg-text)")
+          }
+          onMouseLeave={(e) =>
+            (e.currentTarget.style.color = "var(--rpg-text-muted)")
+          }
         >
           &times;
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto">{children}</div>
+      <div className="flex-1 overflow-y-auto flex flex-col">{children}</div>
     </div>
   );
+}
+
+function EmptyState({ children }: { children: React.ReactNode }) {
+  return (
+    <p
+      className="rpg-mono text-[10px] text-center py-8"
+      style={{ color: "var(--rpg-text-muted)" }}
+    >
+      {children}
+    </p>
+  );
+}
+
+function SectionHeader({
+  label,
+  count,
+}: {
+  label: string;
+  count?: number;
+}) {
+  return (
+    <div
+      className="rpg-font text-[10px] px-3 py-1.5 tracking-wider uppercase"
+      style={{
+        color: "var(--rpg-gold-dim)",
+        background: "rgba(200, 169, 110, 0.05)",
+        borderBottom: "1px solid var(--rpg-border)",
+      }}
+    >
+      {label}
+      {count !== undefined && (
+        <span style={{ opacity: 0.5, marginLeft: 6 }}>{count}</span>
+      )}
+    </div>
+  );
+}
+
+function QuestEntry({
+  task,
+}: {
+  task: {
+    id: string;
+    taskType: string;
+    title: string;
+    description: string;
+    status: string;
+    ownerRole: string | null;
+  };
+}) {
+  const color = STATUS_COLORS[task.status] ?? "var(--rpg-text-dim)";
+  const icon = STATUS_ICONS[task.status] ?? "\u25cb";
+
+  return (
+    <div
+      className="flex items-start gap-2 px-3 py-2"
+      style={{ borderBottom: "1px solid rgba(58, 74, 53, 0.2)" }}
+    >
+      <span className="rpg-mono text-[10px] mt-px" style={{ color }}>
+        {icon}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span
+            className="rpg-mono text-[10px] truncate"
+            style={{ color: "var(--rpg-text)" }}
+          >
+            {task.title}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          {task.ownerRole && (
+            <span
+              className="rpg-mono text-[10px] uppercase"
+              style={{ color: "var(--rpg-text-muted)" }}
+            >
+              {task.ownerRole}
+            </span>
+          )}
+          <span className="rpg-mono text-[10px] uppercase" style={{ color }}>
+            {task.status.replace("_", " ")}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EventBadge({ type }: { type: string }) {
+  const colorMap: Record<string, string> = {
+    TaskCreated: "var(--rpg-sage)",
+    TaskStatusChanged: "var(--rpg-forest)",
+    TaskAssigned: "var(--rpg-sage-dim)",
+    MeetingStarted: "var(--rpg-gold)",
+    MeetingCompleted: "var(--rpg-gold-dim)",
+    MeetingContributionAdded: "var(--rpg-copper)",
+    TasksProposedFromMeeting: "var(--rpg-copper)",
+    ProposedTasksApproved: "var(--rpg-forest-dark)",
+  };
+
+  return (
+    <span
+      className="rpg-mono text-[10px]"
+      style={{ color: colorMap[type] ?? "var(--rpg-text-dim)" }}
+    >
+      {type.replace(/([A-Z])/g, " $1").trim()}
+    </span>
+  );
+}
+
+function AgentEventBadge({ type }: { type: string }) {
+  const colorMap: Record<string, string> = {
+    "agent.output.produced": "var(--rpg-sage)",
+    "agent.tool.invoked": "var(--rpg-sand)",
+    "agent.error": "var(--rpg-danger)",
+    "agent.turn.completed": "var(--rpg-forest-dark)",
+    "agent.turn.started": "var(--rpg-forest)",
+  };
+
+  const shortType = type.replace("agent.", "");
+
+  return (
+    <span
+      className="rpg-mono text-[10px]"
+      style={{ color: colorMap[type] ?? "var(--rpg-text-dim)" }}
+    >
+      {shortType}
+    </span>
+  );
+}
+
+function formatPayload(payload: Record<string, unknown>): string {
+  const title = payload.title as string | undefined;
+  const status = payload.status as string | undefined;
+  const role = payload.role as string | undefined;
+  const meetingType = payload.meetingType as string | undefined;
+
+  const parts: string[] = [];
+  if (title) parts.push(title);
+  if (status) parts.push(`\u2192 ${status}`);
+  if (role) parts.push(`[${role}]`);
+  if (meetingType) parts.push(meetingType);
+
+  return parts.join(" ") || JSON.stringify(payload).slice(0, 80);
 }

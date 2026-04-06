@@ -11,10 +11,6 @@ import type { AgentAdapterShape, AgentSession } from "./adapter";
 import { AgentAdapterError } from "./errors";
 import type { AgentError } from "./errors";
 
-// ---------------------------------------------------------------------------
-// Default role configurations (MVP: PM, Developer, Reviewer)
-// ---------------------------------------------------------------------------
-
 const DEFAULT_ROLE_CONFIGS: Record<
   string,
   Omit<AgentRoleConfig, "workingDirectory">
@@ -23,12 +19,41 @@ const DEFAULT_ROLE_CONFIGS: Record<
     role: "pm",
     systemPrompt: [
       "You are a Project Manager agent in the Conclave orchestration system.",
-      "Your responsibilities: decompose projects into atomic tasks, run planning meetings, manage priorities.",
-      "You CANNOT write code or modify files directly.",
-      "You communicate through structured task creation and status updates.",
-      "Always produce structured JSON output matching the task schema when creating tasks.",
+      "Your responsibilities: decompose user requests into atomic, actionable implementation tasks.",
+      "",
+      "## Rules",
+      "- You CANNOT write implementation code or modify source files.",
+      "- You CAN write planning documents to .conclave/planning/ for context persistence.",
+      "- Each task you create must be small enough for a single developer to complete in one session.",
+      "- Tasks should have clear, specific descriptions of WHAT to implement.",
+      "- Identify dependencies between tasks (which tasks must complete before others can start).",
+      "",
+      "## Output Format",
+      "You MUST end your response with a JSON block wrapped in ```json fences.",
+      "The JSON must conform to this exact schema:",
+      "",
+      "```",
+      "{",
+      '  "tasks": [',
+      "    {",
+      '      "title": "Short task title",',
+      '      "description": "Detailed description of what to implement",',
+      '      "taskType": "implementation",',
+      '      "deps": []',
+      "    }",
+      "  ]",
+      "}",
+      "```",
+      "",
+      "taskType must be one of: implementation, review, testing",
+      "deps is an array of zero-indexed task references (e.g., [0] means this task depends on the first task in the array).",
+      "",
+      "## Important",
+      "- Think through the decomposition carefully before producing the JSON.",
+      "- Write your planning rationale to .conclave/planning/ first, then output the JSON.",
+      "- Every response MUST end with the tasks JSON block. No exceptions.",
     ].join("\n"),
-    allowedTools: ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+    allowedTools: ["Read", "Write", "Glob", "Grep", "WebSearch", "WebFetch"],
     maxTokens: 16384,
     maxTurns: 10,
     model: "claude-sonnet-4-6",
@@ -41,15 +66,7 @@ const DEFAULT_ROLE_CONFIGS: Record<
       "You CANNOT modify task priorities or create new tasks outside your assignment.",
       "You work within the scope of your assigned task and report results as structured output.",
     ].join("\n"),
-    allowedTools: [
-      "Read",
-      "Write",
-      "Edit",
-      "Glob",
-      "Grep",
-      "Bash",
-      "LSP",
-    ],
+    allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "LSP"],
     maxTokens: 32768,
     maxTurns: 25,
     model: "claude-sonnet-4-6",
@@ -64,14 +81,42 @@ const DEFAULT_ROLE_CONFIGS: Record<
     ].join("\n"),
     allowedTools: ["Read", "Glob", "Grep", "Bash"],
     maxTokens: 16384,
-    maxTurns: 5,
+    maxTurns: 15,
+    model: "claude-sonnet-4-6",
+  },
+  tester: {
+    role: "tester",
+    systemPrompt: [
+      "You are a QA Tester agent in the Conclave orchestration system.",
+      "Your responsibilities: write tests, run test suites, verify implementations, and report test results.",
+      "You CANNOT modify production code — only test files.",
+      "You CAN run test commands, read source code for understanding, and create test fixtures.",
+      "Produce structured test reports with pass/fail status and details on failures.",
+    ].join("\n"),
+    allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    maxTokens: 24576,
+    maxTurns: 20,
     model: "claude-sonnet-4-6",
   },
 };
 
-// ---------------------------------------------------------------------------
-// AgentService interface
-// ---------------------------------------------------------------------------
+export type AgentPoolConfig = {
+  readonly maxPerRole: Record<AgentRole, number>;
+};
+
+export const DEFAULT_POOL_CONFIG: AgentPoolConfig = {
+  maxPerRole: {
+    pm: 1,
+    developer: 3,
+    reviewer: 1,
+    tester: 2,
+  },
+};
+
+export type TeamComposition = Record<
+  AgentRole,
+  { max: number; active: number }
+>;
 
 export interface AgentServiceShape {
   readonly startAgent: (
@@ -95,22 +140,44 @@ export interface AgentServiceShape {
 
   readonly stopAll: () => Effect.Effect<void>;
 
-  readonly getAgent: (
-    agentId: AgentId,
-  ) => Effect.Effect<AgentSession | null>;
+  readonly getAgent: (agentId: AgentId) => Effect.Effect<AgentSession | null>;
 
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentSession>>;
 
   readonly streamEvents: Stream.Stream<AgentRuntimeEvent>;
-}
 
-// ---------------------------------------------------------------------------
-// AgentService implementation
-// ---------------------------------------------------------------------------
+  readonly markBusy: (agentId: AgentId) => void;
+  readonly markAvailable: (agentId: AgentId) => void;
+
+  readonly findOrSpawnAgent: (
+    role: AgentRole,
+    workingDirectory: string,
+  ) => Effect.Effect<AgentSession | null, AgentError>;
+
+  readonly getTeamComposition: () => TeamComposition;
+
+  readonly poolConfig: AgentPoolConfig;
+
+  readonly onRosterChange: (callback: () => void) => void;
+}
 
 export function createAgentService(
   adapter: AgentAdapterShape,
+  poolConfig: AgentPoolConfig = DEFAULT_POOL_CONFIG,
 ): AgentServiceShape {
+  const busyAgents = new Set<AgentId>();
+  const roleCounters = new Map<AgentRole, number>();
+  const rosterCallbacks: Array<() => void> = [];
+
+  const notifyRosterChange = () => {
+    for (const cb of rosterCallbacks) cb();
+  };
+
+  const nextAgentId = (role: AgentRole): AgentId => {
+    const count = (roleCounters.get(role) ?? 0) + 1;
+    roleCounters.set(role, count);
+    return `agent-${role}-${count}` as AgentId;
+  };
   const startAgent: AgentServiceShape["startAgent"] = (
     agentId,
     role,
@@ -136,7 +203,9 @@ export function createAgentService(
         role,
       };
 
-      return yield* adapter.startSession(agentId, config);
+      const session = yield* adapter.startSession(agentId, config);
+      notifyRosterChange();
+      return session;
     });
 
   const sendMessage: AgentServiceShape["sendMessage"] = (
@@ -165,8 +234,64 @@ export function createAgentService(
   const listAgents: AgentServiceShape["listAgents"] = () =>
     adapter.listSessions();
 
-  const streamEvents: AgentServiceShape["streamEvents"] =
-    adapter.streamEvents;
+  const streamEvents: AgentServiceShape["streamEvents"] = adapter.streamEvents;
+
+  const markBusy = (agentId: AgentId): void => {
+    busyAgents.add(agentId);
+  };
+
+  const markAvailable = (agentId: AgentId): void => {
+    busyAgents.delete(agentId);
+  };
+
+  const findOrSpawnAgent: AgentServiceShape["findOrSpawnAgent"] = (
+    role,
+    workingDirectory,
+  ) =>
+    Effect.gen(function* () {
+      const agents = yield* adapter.listSessions();
+      const roleAgents = agents.filter((a) => a.role === role);
+
+      const idle = roleAgents.find((a) => !busyAgents.has(a.agentId));
+      if (idle) return idle;
+
+      const max = poolConfig.maxPerRole[role] ?? 0;
+      if (roleAgents.length >= max) {
+        console.log(
+          `[agent-service] Role '${role}' at capacity (${roleAgents.length}/${max}) — task will wait`,
+        );
+        return null;
+      }
+
+      const agentId = nextAgentId(role);
+      console.log(
+        `[agent-service] Spawning new ${role} agent: ${agentId} (${roleAgents.length + 1}/${max})`,
+      );
+      const session = yield* startAgent(agentId, role, workingDirectory);
+      return session;
+    });
+
+  const getTeamComposition = (): TeamComposition => {
+    const composition = {} as Record<
+      AgentRole,
+      { max: number; active: number }
+    >;
+    for (const role of ["pm", "developer", "reviewer", "tester"] as const) {
+      composition[role] = {
+        max: poolConfig.maxPerRole[role] ?? 0,
+        active: 0,
+      };
+    }
+
+    for (const role of ["pm", "developer", "reviewer", "tester"] as const) {
+      for (const agentId of busyAgents) {
+        if (agentId.startsWith(`agent-${role}`)) {
+          composition[role].active++;
+        }
+      }
+    }
+    return composition;
+  };
 
   return {
     startAgent,
@@ -177,5 +302,13 @@ export function createAgentService(
     getAgent,
     listAgents,
     streamEvents,
+    markBusy,
+    markAvailable,
+    findOrSpawnAgent,
+    getTeamComposition,
+    poolConfig,
+    onRosterChange: (cb: () => void) => {
+      rosterCallbacks.push(cb);
+    },
   } satisfies AgentServiceShape;
 }

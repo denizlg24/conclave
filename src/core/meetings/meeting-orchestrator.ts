@@ -19,6 +19,34 @@ export interface MeetingOrchestratorShape {
   ) => Effect.Effect<MeetingResult, MeetingError>;
 }
 
+// Role-specific guidance per meeting type
+const ROLE_GUIDANCE: Record<string, Record<string, string>> = {
+  review: {
+    pm: "Evaluate overall delivery quality, completeness against the original request, and identify gaps or follow-up work needed.",
+    developer: "Reflect on implementation challenges, technical debt introduced, patterns that worked well, and areas that need improvement.",
+    reviewer: "Assess code quality, identify risks, architectural concerns, and suggest concrete improvements.",
+    tester: "Report on test coverage, edge cases discovered, regressions found, and remaining quality concerns.",
+  },
+  planning: {
+    pm: "Decompose the request into concrete, actionable tasks with clear dependencies.",
+    developer: "Assess technical feasibility, estimate complexity, and flag potential blockers.",
+    reviewer: "Identify quality risks and suggest review checkpoints.",
+    tester: "Propose testing strategy, identify critical paths to validate.",
+  },
+  retrospective: {
+    pm: "Summarize what went well and what didn't. Propose process improvements.",
+    developer: "Share what helped or hindered productivity. Suggest tooling or workflow changes.",
+    reviewer: "Reflect on review effectiveness and code quality trends.",
+    tester: "Assess testing effectiveness and propose coverage improvements.",
+  },
+};
+
+const SYNTHESIS_GUIDANCE: Record<string, string> = {
+  review: "Focus on identifying concrete follow-up tasks: bug fixes, improvements, tech debt cleanup, missing test coverage, and any incomplete work.",
+  planning: "Focus on creating a clear, ordered task breakdown with well-defined dependencies.",
+  retrospective: "Focus on actionable process improvements and lessons learned.",
+};
+
 export function createMeetingOrchestrator(deps: {
   readonly engine: OrchestrationEngineShape;
   readonly agentService: AgentServiceShape;
@@ -81,6 +109,9 @@ export function createMeetingOrchestrator(deps: {
             .map((c) => `**${c.agentRole}:** ${c.content}`)
             .join("\n\n");
 
+          const roleSpecificGuidance =
+            ROLE_GUIDANCE[meeting.meetingType]?.[role] ?? "";
+
           const prompt = [
             `## Meeting Contribution Request`,
             ``,
@@ -91,6 +122,9 @@ export function createMeetingOrchestrator(deps: {
             ``,
             priorContributions
               ? `### Prior Contributions\n${priorContributions}\n`
+              : "",
+            roleSpecificGuidance
+              ? `### Your Focus\n${roleSpecificGuidance}\n`
               : "",
             `Please provide your structured contribution to this agenda item.`,
             `Focus on your role's perspective and responsibilities.`,
@@ -162,6 +196,8 @@ export function createMeetingOrchestrator(deps: {
         )
         .join("\n\n");
 
+      const typeGuidance = SYNTHESIS_GUIDANCE[meeting.meetingType] ?? "";
+
       const synthesisPrompt = [
         `## Meeting Synthesis Request`,
         ``,
@@ -172,6 +208,7 @@ export function createMeetingOrchestrator(deps: {
         `### All Contributions`,
         allContributions,
         ``,
+        typeGuidance ? `### Synthesis Focus\n${typeGuidance}\n` : "",
         `Please synthesize all contributions into:`,
         `1. A concise summary of the meeting outcomes`,
         `2. A list of proposed tasks as JSON array:`,

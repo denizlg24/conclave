@@ -10,10 +10,6 @@ import type { AgentRole } from "@/shared/types/orchestration";
 
 import type { AgentError } from "./errors";
 
-// ---------------------------------------------------------------------------
-// Session state tracked by the adapter
-// ---------------------------------------------------------------------------
-
 export interface AgentSession {
   readonly agentId: AgentId;
   readonly role: AgentRole;
@@ -25,10 +21,6 @@ export interface AgentSession {
   readonly turnCount: number;
   readonly startedAt: string;
 }
-
-// ---------------------------------------------------------------------------
-// Adapter interface (ported from ProviderAdapter pattern)
-// ---------------------------------------------------------------------------
 
 export interface AgentAdapterShape {
   readonly startSession: (
@@ -46,9 +38,7 @@ export interface AgentAdapterShape {
 
   readonly stopSession: (agentId: AgentId) => Effect.Effect<void, AgentError>;
 
-  readonly getSession: (
-    agentId: AgentId,
-  ) => Effect.Effect<AgentSession | null>;
+  readonly getSession: (agentId: AgentId) => Effect.Effect<AgentSession | null>;
 
   readonly listSessions: () => Effect.Effect<ReadonlyArray<AgentSession>>;
 

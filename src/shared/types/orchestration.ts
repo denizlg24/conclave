@@ -37,7 +37,7 @@ export const TaskType = Schema.Literals([
 ]);
 export type TaskType = typeof TaskType.Type;
 
-export const AgentRole = Schema.Literals(["pm", "developer", "reviewer"]);
+export const AgentRole = Schema.Literals(["pm", "developer", "reviewer", "tester"]);
 export type AgentRole = typeof AgentRole.Type;
 
 export const MeetingType = Schema.Literals([

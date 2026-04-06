@@ -1,4 +1,5 @@
 import { Effect, Exit, Scope, Stream } from "effect";
+import { join } from "node:path";
 
 import type { BusEvent } from "@/shared/types/bus-event";
 import type {
@@ -16,17 +17,19 @@ import { createReceiptStore } from "@/core/communication/receipt-store";
 import { createOrchestratorReactor } from "@/core/communication/orchestrator-reactor";
 import { createAgentReactor } from "@/core/communication/agent-reactor";
 import { createMeetingReactor } from "@/core/communication/meeting-reactor";
+import { createPlanningReactor } from "@/core/communication/planning-reactor";
+import { createReviewMeetingReactor } from "@/core/communication/review-meeting-reactor";
+import { createMeetingOrchestrator } from "@/core/meetings";
 import { createAgentService } from "@/core/agents/service";
 import { createClaudeCodeAdapter } from "@/core/agents/claude-code-adapter";
+import { createPersistentEventStore } from "@/core/memory/persistent-event-store";
+import { createDecisionLogStore } from "@/core/memory/decision-log-store";
 
 import type {
+  SerializedAgentRoster,
   SerializedEvent,
   SerializedReadModel,
 } from "@/shared/rpc/rpc-schema";
-
-// ---------------------------------------------------------------------------
-// Serialization helpers
-// ---------------------------------------------------------------------------
 
 function serializeReadModel(model: OrchestrationReadModel): SerializedReadModel {
   return {
@@ -79,16 +82,17 @@ function serializeEvent(event: OrchestrationEvent): SerializedEvent {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Conclave system shape
-// ---------------------------------------------------------------------------
-
 export interface ConclaveShape {
   readonly engine: OrchestrationEngineShape;
   readonly bus: EventBusShape;
 
   readonly getSerializedState: () => Promise<SerializedReadModel>;
   readonly getSerializedEvents: (fromSequence: number) => Promise<SerializedEvent[]>;
+  readonly getAgentRoster: () => Promise<SerializedAgentRoster>;
+
+  readonly sendCommand: (params: {
+    message: string;
+  }) => Promise<{ taskId: string; meetingId: string }>;
 
   readonly createTask: (params: {
     taskType: string;
@@ -117,41 +121,47 @@ export interface ConclaveShape {
 
   readonly onEvent: (callback: (event: SerializedEvent, model: SerializedReadModel) => void) => void;
 
+  readonly onAgentEvent: (callback: (event: AgentRuntimeEventRecord) => void) => void;
+
+  readonly onAgentRoster: (callback: (roster: SerializedAgentRoster) => void) => void;
+
   readonly shutdown: () => Promise<void>;
 }
 
-// ---------------------------------------------------------------------------
-// Bootstrap
-// ---------------------------------------------------------------------------
+type AgentRuntimeEventRecord = {
+  type: string;
+  agentId: string;
+  sessionId: string;
+  occurredAt: string;
+  [key: string]: unknown;
+};
 
-export async function bootstrapConclave(): Promise<ConclaveShape> {
+export async function bootstrapConclave(projectPath: string): Promise<ConclaveShape> {
   const scope = Effect.runSync(Scope.make());
+  const memoryPath = join(projectPath, ".conclave", "memory");
 
   const program = Effect.gen(function* () {
     const bus = yield* createEventBus();
-    const engine = yield* createOrchestrationEngine({ eventBus: bus });
+    const eventStore = yield* createPersistentEventStore({ storagePath: memoryPath });
+    const decisionLog = yield* createDecisionLogStore({ storagePath: memoryPath });
+    const engine = yield* createOrchestrationEngine({ eventBus: bus, eventStore });
     const receiptStore = yield* createReceiptStore();
 
     const adapter = yield* createClaudeCodeAdapter();
     const agentService = createAgentService(adapter);
 
-    // Start MVP agent sessions so reactors can auto-assign tasks
-    // TODO: working directory should come from project config once projects are implemented
-    const agentWorkingDirectory = process.cwd();
-    for (const role of ["pm", "developer", "reviewer"] as const) {
-      yield* agentService.startAgent(
-        `agent-${role}` as AgentId,
-        role,
-        agentWorkingDirectory,
-      );
-    }
+    yield* agentService.startAgent(
+      "agent-pm" as AgentId,
+      "pm",
+      projectPath,
+    );
 
-    // Start reactors in the scope
     yield* createOrchestratorReactor({
       engine,
       bus,
       receiptStore,
       agentService,
+      workingDirectory: projectPath,
     }).pipe(Effect.provideService(Scope.Scope, scope));
 
     yield* createAgentReactor({
@@ -167,16 +177,48 @@ export async function bootstrapConclave(): Promise<ConclaveShape> {
       receiptStore,
     }).pipe(Effect.provideService(Scope.Scope, scope));
 
-    // Event listener infrastructure
+    yield* createPlanningReactor({
+      engine,
+      bus,
+      receiptStore,
+    }).pipe(Effect.provideService(Scope.Scope, scope));
+
+    const meetingOrchestrator = createMeetingOrchestrator({ engine, agentService });
+
+    yield* createReviewMeetingReactor({
+      engine,
+      bus,
+      receiptStore,
+      meetingOrchestrator,
+    }).pipe(Effect.provideService(Scope.Scope, scope));
+
     const eventCallbacks: Array<
       (event: SerializedEvent, model: SerializedReadModel) => void
     > = [];
+    const agentEventCallbacks: Array<
+      (event: AgentRuntimeEventRecord) => void
+    > = [];
+    const rosterCallbacks: Array<
+      (roster: SerializedAgentRoster) => void
+    > = [];
 
-    // Subscribe to bus for pushing events to UI
+    agentService.onRosterChange(() => {
+      Effect.runPromise(agentService.listAgents()).then((sessions) => {
+        const roster: SerializedAgentRoster = {
+          agents: sessions.map((s) => ({
+            agentId: s.agentId,
+            role: s.role,
+            sessionId: s.claudeSessionId,
+          })),
+        };
+        for (const cb of rosterCallbacks) cb(roster);
+      });
+    });
+
     const allEvents = (_e: BusEvent): _e is BusEvent => true;
-    const stream = bus.subscribeFiltered(allEvents);
+    const busStream = bus.subscribeFiltered(allEvents);
 
-    yield* stream.pipe(
+    yield* busStream.pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
           if (!event.type.startsWith("task.") && !event.type.startsWith("meeting.")) {
@@ -194,16 +236,40 @@ export async function bootstrapConclave(): Promise<ConclaveShape> {
       Effect.forkScoped,
     ).pipe(Effect.provideService(Scope.Scope, scope));
 
-    return { engine, bus, eventCallbacks };
+    yield* agentService.streamEvents.pipe(
+      Stream.runForEach((event) =>
+        Effect.sync(() => {
+          const record = event as unknown as AgentRuntimeEventRecord;
+          for (const cb of agentEventCallbacks) {
+            cb(record);
+          }
+        }),
+      ),
+      Effect.forkScoped,
+    ).pipe(Effect.provideService(Scope.Scope, scope));
+
+    return { engine, bus, agentService, decisionLog, eventCallbacks, agentEventCallbacks, rosterCallbacks };
   });
 
-  const { engine, bus, eventCallbacks } = await Effect.runPromise(program);
+  const { engine, bus, agentService, decisionLog, eventCallbacks, agentEventCallbacks, rosterCallbacks } = await Effect.runPromise(program);
 
-  // --- Public API (plain promises for RPC) ---
+  const existingDecisions = await Effect.runPromise(decisionLog.getAll());
+  console.log(`[conclave] Memory initialized: ${existingDecisions.length} decision log entries loaded`);
 
   const getSerializedState = async (): Promise<SerializedReadModel> => {
     const model = await Effect.runPromise(engine.getReadModel());
     return serializeReadModel(model);
+  };
+
+  const getAgentRoster = async (): Promise<SerializedAgentRoster> => {
+    const sessions = await Effect.runPromise(agentService.listAgents());
+    return {
+      agents: sessions.map((s) => ({
+        agentId: s.agentId,
+        role: s.role,
+        sessionId: s.claudeSessionId,
+      })),
+    };
   };
 
   const getSerializedEvents = async (
@@ -213,6 +279,51 @@ export async function bootstrapConclave(): Promise<ConclaveShape> {
       engine.readEvents(fromSequence).pipe(Stream.runCollect, Effect.map((chunk) => [...chunk])),
     );
     return events.map(serializeEvent);
+  };
+
+  const sendCommand = async (params: {
+    message: string;
+  }): Promise<{ taskId: string; meetingId: string }> => {
+    const taskId = crypto.randomUUID();
+    const meetingId = crypto.randomUUID();
+    const message = params.message;
+
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "meeting.schedule",
+        commandId: crypto.randomUUID() as CommandId,
+        meetingId: meetingId as MeetingId,
+        meetingType: "planning",
+        agenda: [message],
+        participants: ["pm", "developer", "reviewer", "tester"],
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "meeting.start",
+        commandId: crypto.randomUUID() as CommandId,
+        meetingId: meetingId as MeetingId,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "task.create",
+        commandId: crypto.randomUUID() as CommandId,
+        taskId: taskId as TaskId,
+        taskType: "planning" as const,
+        title: message.length > 60 ? message.slice(0, 57) + "..." : message,
+        description: message,
+        deps: [] as TaskId[],
+        input: { meetingId },
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    return { taskId, meetingId };
   };
 
   const createTask = async (params: {
@@ -287,7 +398,7 @@ export async function bootstrapConclave(): Promise<ConclaveShape> {
         meetingId: meetingId as MeetingId,
         meetingType: params.meetingType as "planning",
         agenda: params.agenda,
-        participants: params.participants as Array<"pm" | "developer" | "reviewer">,
+        participants: params.participants as Array<"pm" | "developer" | "reviewer" | "tester">,
         createdAt: new Date().toISOString(),
       }),
     );
@@ -298,6 +409,18 @@ export async function bootstrapConclave(): Promise<ConclaveShape> {
     callback: (event: SerializedEvent, model: SerializedReadModel) => void,
   ) => {
     eventCallbacks.push(callback);
+  };
+
+  const onAgentEvent = (
+    callback: (event: AgentRuntimeEventRecord) => void,
+  ) => {
+    agentEventCallbacks.push(callback);
+  };
+
+  const onAgentRoster = (
+    callback: (roster: SerializedAgentRoster) => void,
+  ) => {
+    rosterCallbacks.push(callback);
   };
 
   const shutdown = async () => {
@@ -313,12 +436,16 @@ export async function bootstrapConclave(): Promise<ConclaveShape> {
     engine,
     bus,
     getSerializedState,
+    getAgentRoster,
     getSerializedEvents,
+    sendCommand,
     createTask,
     updateTaskStatus,
     approveProposedTasks,
     scheduleMeeting,
     onEvent,
+    onAgentEvent,
+    onAgentRoster,
     shutdown,
   };
 }

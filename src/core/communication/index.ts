@@ -4,4 +4,5 @@ export { createOrchestratorReactor } from "./orchestrator-reactor";
 export { createAgentReactor } from "./agent-reactor";
 export { createAgentRuntimeIngestion } from "./agent-runtime-ingestion";
 export { createMeetingReactor } from "./meeting-reactor";
+export { createReviewMeetingReactor } from "./review-meeting-reactor";
 export { ReactorError, MeetingError } from "./errors";
