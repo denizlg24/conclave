@@ -16,7 +16,16 @@ import type {
   SerializedEvent,
   SerializedProject,
   SerializedReadModel,
+  SerializedSuspendedTask,
 } from "../../shared/rpc/rpc-schema";
+
+type QuotaExhaustedInfo = {
+  agentId: string;
+  taskId: string;
+  adapterType: string;
+  rawMessage: string;
+  occurredAt: string;
+};
 
 interface ConclaveState {
   activeProject: SerializedProject | null;
@@ -25,6 +34,8 @@ interface ConclaveState {
   agentEvents: SerializedAgentEvent[];
   agentRoster: SerializedAgentInfo[];
   projects: SerializedProject[];
+  suspendedTasks: SerializedSuspendedTask[];
+  quotaExhaustedInfo: QuotaExhaustedInfo | null;
   connected: boolean;
 }
 
@@ -56,6 +67,9 @@ interface ConclaveActions {
     agenda: string[];
     participants: string[];
   }) => Promise<{ meetingId: string }>;
+  getSuspendedTasks: () => Promise<SerializedSuspendedTask[]>;
+  resumeSuspendedTask: (taskId: string) => Promise<void>;
+  dismissQuotaExhausted: () => void;
   refresh: () => Promise<void>;
 }
 
@@ -95,6 +109,8 @@ interface RPCClient {
     agenda: string[];
     participants: string[];
   }) => Promise<{ meetingId: string }>;
+  getSuspendedTasks: (params: Record<string, never>) => Promise<SerializedSuspendedTask[]>;
+  resumeSuspendedTask: (params: { taskId: string }) => Promise<{ success: boolean }>;
 }
 
 export function ConclaveProvider({ children }: { children: ReactNode }) {
@@ -105,6 +121,8 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     agentEvents: [],
     agentRoster: [],
     projects: [],
+    suspendedTasks: [],
+    quotaExhaustedInfo: null,
     connected: false,
   });
 
@@ -112,6 +130,7 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const rpc = Electroview.defineRPC<ConclaveRPCSchema>({
+      maxRequestTime: 5 * 60 * 1000, // 5 minutes - file dialogs and operations can take a while
       handlers: {
         requests: {},
         messages: {
@@ -124,7 +143,7 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
           onEvent: (event) => {
             setState((prev) => ({
               ...prev,
-              events: [...prev.events, event],
+              events: [...prev.events, event].slice(-500),
             }));
           },
           onProjectLoaded: (project) => {
@@ -136,13 +155,19 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
           onAgentEvent: (agentEvent) => {
             setState((prev) => ({
               ...prev,
-              agentEvents: [...prev.agentEvents, agentEvent],
+              agentEvents: [...prev.agentEvents, agentEvent].slice(-500),
             }));
           },
           onAgentRoster: (roster) => {
             setState((prev) => ({
               ...prev,
               agentRoster: roster.agents,
+            }));
+          },
+          onQuotaExhausted: (info) => {
+            setState((prev) => ({
+              ...prev,
+              quotaExhaustedInfo: info,
             }));
           },
         },
@@ -163,10 +188,11 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
           ]);
 
           if (activeProject) {
-            const [model, events, roster] = await Promise.all([
+            const [model, events, roster, suspendedTasks] = await Promise.all([
               client.getState({} as Record<string, never>),
               client.getEvents({ fromSequence: 0 }),
               client.getAgentRoster({} as Record<string, never>),
+              client.getSuspendedTasks({} as Record<string, never>),
             ]);
             setState((prev) => ({
               ...prev,
@@ -174,6 +200,7 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
               readModel: model,
               events,
               agentRoster: roster.agents,
+              suspendedTasks,
               projects,
               connected: true,
             }));
@@ -239,15 +266,17 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     const client = rpcClientRef.current;
     if (!client) throw new Error("Not connected");
     await client.loadProject({ projectId });
-    const [model, events] = await Promise.all([
+    const [model, events, suspendedTasks] = await Promise.all([
       client.getState({} as Record<string, never>),
       client.getEvents({ fromSequence: 0 }),
+      client.getSuspendedTasks({} as Record<string, never>),
     ]);
     setState((prev) => ({
       ...prev,
       readModel: model,
       events,
       agentEvents: [],
+      suspendedTasks,
     }));
   }, []);
 
@@ -310,6 +339,27 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const getSuspendedTasks = useCallback(async () => {
+    const client = rpcClientRef.current;
+    if (!client) throw new Error("Not connected");
+    const tasks = await client.getSuspendedTasks({} as Record<string, never>);
+    setState((prev) => ({ ...prev, suspendedTasks: tasks }));
+    return tasks;
+  }, []);
+
+  const resumeSuspendedTask = useCallback(async (taskId: string) => {
+    const client = rpcClientRef.current;
+    if (!client) throw new Error("Not connected");
+    await client.resumeSuspendedTask({ taskId });
+    // Refresh suspended tasks list after resuming
+    const tasks = await client.getSuspendedTasks({} as Record<string, never>);
+    setState((prev) => ({ ...prev, suspendedTasks: tasks }));
+  }, []);
+
+  const dismissQuotaExhausted = useCallback(() => {
+    setState((prev) => ({ ...prev, quotaExhaustedInfo: null }));
+  }, []);
+
   const value: ConclaveContextValue = {
     ...state,
     listProjects,
@@ -322,6 +372,9 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     updateTaskStatus,
     approveProposedTasks,
     scheduleMeeting,
+    getSuspendedTasks,
+    resumeSuspendedTask,
+    dismissQuotaExhausted,
     refresh,
   };
 

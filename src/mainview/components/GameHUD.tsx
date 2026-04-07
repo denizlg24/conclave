@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useConclave } from "../hooks/use-conclave";
 import { CommandBar } from "./CommandBar";
+import { MeetingViewer } from "./MeetingViewer";
 
 const STATUS_COLORS: Record<string, string> = {
   proposed: "#c8a96e",
   pending: "#f2cc8f",
   assigned: "#a1bc98",
   in_progress: "#81b29a",
+  suspended: "#f59e0b",
   review: "#e07a5f",
   done: "#6a994e",
   failed: "#c45c4a",
@@ -19,6 +21,7 @@ const STATUS_ICONS: Record<string, string> = {
   pending: "\u25d4",
   assigned: "\u25d1",
   in_progress: "\u25b6",
+  suspended: "\u23f8",
   review: "\u25c6",
   done: "\u2714",
   failed: "\u2718",
@@ -26,7 +29,7 @@ const STATUS_ICONS: Record<string, string> = {
   rejected: "\u2718",
 };
 
-type Panel = "quests" | "journal" | "party" | "approvals" | null;
+type Panel = "quests" | "journal" | "party" | "approvals" | "council" | "suspended" | null;
 
 export function GameHUD() {
   const {
@@ -36,8 +39,10 @@ export function GameHUD() {
     connected,
     activeProject,
     approveProposedTasks,
+    resumeSuspendedTask,
   } = useConclave();
   const [activePanel, setActivePanel] = useState<Panel>(null);
+  const [highlightMeetingId, setHighlightMeetingId] = useState<string | null>(null);
   const [showCommand, setShowCommand] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const partyLogRef = useRef<HTMLDivElement>(null);
@@ -45,6 +50,7 @@ export function GameHUD() {
   const tasks = readModel?.tasks ?? [];
   const meetings = readModel?.meetings ?? [];
   const proposedTasks = tasks.filter((t) => t.status === "proposed");
+  const suspendedTasks = tasks.filter((t) => t.status === "suspended");
   const activeTasks = tasks.filter((t) =>
     ["assigned", "in_progress", "review"].includes(t.status),
   );
@@ -87,6 +93,9 @@ export function GameHUD() {
           break;
         case "p":
           togglePanel("party");
+          break;
+        case "c":
+          togglePanel("council");
           break;
         case " ":
           e.preventDefault();
@@ -139,6 +148,19 @@ export function GameHUD() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {suspendedTasks.length > 0 && (
+            <button
+              onClick={() => togglePanel("suspended")}
+              className="rpg-mono text-[11px] px-2.5 py-1 cursor-pointer"
+              style={{
+                background: "rgba(245, 158, 11, 0.15)",
+                border: "1px solid rgba(245, 158, 11, 0.4)",
+                color: "#f59e0b",
+              }}
+            >
+              {suspendedTasks.length} SUSPENDED
+            </button>
+          )}
           {proposedTasks.length > 0 && (
             <button
               onClick={() => togglePanel("approvals")}
@@ -216,6 +238,13 @@ export function GameHUD() {
             active={activePanel === "party"}
             count={agentEvents.length}
             onClick={() => togglePanel("party")}
+          />
+          <ActionButton
+            label="COUNCIL"
+            hotkey="C"
+            active={activePanel === "council"}
+            count={meetings.length}
+            onClick={() => togglePanel("council")}
           />
 
           <div
@@ -515,12 +544,36 @@ export function GameHUD() {
                     </p>
                   )}
                   {meeting && (
-                    <span
-                      className="rpg-mono text-[10px]"
-                      style={{ color: "var(--rpg-text-muted)" }}
-                    >
-                      Proposed during {meeting.meetingType} council
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="rpg-mono text-[10px]"
+                        style={{ color: "var(--rpg-text-muted)" }}
+                      >
+                        Proposed during {meeting.meetingType} council
+                      </span>
+                      <button
+                        onClick={() => {
+                          setHighlightMeetingId(meeting.id);
+                          setActivePanel("council");
+                        }}
+                        className="rpg-mono text-[9px] px-1.5 py-0.5 cursor-pointer transition-all"
+                        style={{
+                          background: "rgba(200, 169, 110, 0.1)",
+                          border: "1px solid var(--rpg-gold-dim)",
+                          color: "var(--rpg-gold-dim)",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "rgba(200, 169, 110, 0.2)";
+                          e.currentTarget.style.color = "var(--rpg-gold)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "rgba(200, 169, 110, 0.1)";
+                          e.currentTarget.style.color = "var(--rpg-gold-dim)";
+                        }}
+                      >
+                        VIEW COUNCIL
+                      </button>
+                    </div>
                   )}
                   {meetingId && (
                     <div className="flex gap-2 pt-1">
@@ -579,6 +632,88 @@ export function GameHUD() {
                 </div>
               );
             })
+          )}
+        </RPGPanel>
+      )}
+
+      {activePanel === "council" && (
+        <MeetingViewer
+          meetings={meetings}
+          highlightMeetingId={highlightMeetingId}
+          onClose={() => setActivePanel(null)}
+        />
+      )}
+
+      {activePanel === "suspended" && (
+        <RPGPanel
+          title="SUSPENDED QUESTS"
+          onClose={() => setActivePanel(null)}
+        >
+          {suspendedTasks.length === 0 ? (
+            <EmptyState>No suspended quests</EmptyState>
+          ) : (
+            suspendedTasks.map((t) => (
+              <div
+                key={t.id}
+                className="px-3 py-3 space-y-2"
+                style={{
+                  borderBottom: "1px solid var(--rpg-border)",
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className="rpg-mono text-[10px] uppercase"
+                    style={{ color: "#f59e0b" }}
+                  >
+                    {t.taskType}
+                  </span>
+                  <span
+                    className="rpg-mono text-[11px]"
+                    style={{ color: "var(--rpg-text)" }}
+                  >
+                    {t.title}
+                  </span>
+                </div>
+                {t.description && (
+                  <p
+                    className="rpg-mono text-[10px]"
+                    style={{ color: "var(--rpg-text-dim)" }}
+                  >
+                    {t.description.slice(0, 150)}
+                    {t.description.length > 150 ? "\u2026" : ""}
+                  </p>
+                )}
+                <div className="flex items-center gap-2">
+                  <span
+                    className="rpg-mono text-[10px]"
+                    style={{ color: "var(--rpg-text-muted)" }}
+                  >
+                    Awaiting credits to resume
+                  </span>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => resumeSuspendedTask(t.id)}
+                    className="rpg-mono text-[10px] px-3 py-1 cursor-pointer transition-all"
+                    style={{
+                      background: "rgba(106, 153, 78, 0.2)",
+                      border: "1px solid rgba(106, 153, 78, 0.4)",
+                      color: "#6a994e",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(106, 153, 78, 0.35)";
+                      e.currentTarget.style.borderColor = "#6a994e";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "rgba(106, 153, 78, 0.2)";
+                      e.currentTarget.style.borderColor = "rgba(106, 153, 78, 0.4)";
+                    }}
+                  >
+                    RESUME
+                  </button>
+                </div>
+              </div>
+            ))
           )}
         </RPGPanel>
       )}

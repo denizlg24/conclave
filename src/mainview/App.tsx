@@ -5,7 +5,9 @@ import { ConclaveProvider, useConclave } from "./hooks/use-conclave";
 import { GameHUD } from "./components/GameHUD";
 import { ProjectScreen } from "./components/ProjectScreen";
 import { AgentPanel } from "./components/AgentPanel";
+import { QuotaExhaustedDialog } from "./components/QuotaExhaustedDialog";
 import type { SerializedAgentInfo } from "../shared/rpc/rpc-schema";
+import officeBg from "./assets/office_bg.png";
 
 const APP_HEIGHT_VAR = "--app-height";
 
@@ -176,9 +178,26 @@ function GameScene() {
 
   const agents = useMemo(() => {
     const map = agentMapRef.current;
+    const currentIds = new Set(agentRoster.map((a) => a.agentId));
+
+    // Remove agents no longer in the roster
+    for (const [id, entry] of map) {
+      if (!currentIds.has(id)) {
+        if (entry.deskIdx !== null) occupiedDesks.delete(entry.deskIdx);
+        map.delete(id);
+      }
+    }
+
+    if (agentRoster.length === 0 && map.size === 0) {
+      roleCounterRef.current = new Map();
+    }
 
     for (const info of agentRoster) {
-      if (!map.has(info.agentId)) {
+      const existing = map.get(info.agentId);
+      if (existing) {
+        // Update info to keep role/session data fresh
+        existing.info = info;
+      } else {
         const counter = roleCounterRef.current;
         const roleIdx = counter.get(info.role) ?? 0;
         counter.set(info.role, roleIdx + 1);
@@ -360,7 +379,7 @@ function GameScene() {
     <main
       className="w-full h-full bg-center bg-no-repeat relative overflow-hidden"
       style={{
-        backgroundImage: "url(/office_bg.png)",
+        backgroundImage: `url(${officeBg})`,
         backgroundSize: "contain",
         backgroundColor: "var(--rpg-bg)",
       }}
@@ -493,6 +512,7 @@ export default function App() {
   return (
     <ConclaveProvider>
       <AppRouter />
+      <QuotaExhaustedDialog />
     </ConclaveProvider>
   );
 }

@@ -6,6 +6,7 @@ const STATUS_COLUMNS = [
   { key: "pending", label: "Pending", color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/30" },
   { key: "assigned", label: "Assigned", color: "text-blue-400", bg: "bg-blue-500/10", border: "border-blue-500/30" },
   { key: "in_progress", label: "In Progress", color: "text-cyan-400", bg: "bg-cyan-500/10", border: "border-cyan-500/30" },
+  { key: "suspended", label: "Suspended", color: "text-amber-400", bg: "bg-amber-500/10", border: "border-amber-500/30" },
   { key: "review", label: "Review", color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30" },
   { key: "done", label: "Done", color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/30" },
   { key: "failed", label: "Failed", color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/30" },
