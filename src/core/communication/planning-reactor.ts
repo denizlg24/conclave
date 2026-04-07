@@ -65,7 +65,16 @@ export function createPlanningReactor(deps: {
 }): Effect.Effect<Fiber.Fiber<void>, never, Scope.Scope> {
   const { engine, bus, receiptStore } = deps;
 
-  const completeMeetingForTask = (taskInput: unknown) =>
+  const completeMeetingForTask = (
+    taskInput: unknown,
+    proposedTasks: Array<{
+      taskType: "decomposition" | "implementation" | "review" | "testing" | "planning";
+      title: string;
+      description: string;
+      deps: TaskId[];
+      input: unknown;
+    }> = [],
+  ) =>
     Effect.gen(function* () {
       const meetingId = (taskInput as Record<string, unknown> | null)
         ?.meetingId as string | undefined;
@@ -77,10 +86,11 @@ export function createPlanningReactor(deps: {
 
       yield* engine.dispatch({
         type: "meeting.complete",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         meetingId: meetingId as MeetingId,
         summary: "Planning meeting completed.",
-        proposedTasks: [],
+        proposedTasks,
         createdAt: new Date().toISOString(),
       });
 
@@ -118,6 +128,7 @@ export function createPlanningReactor(deps: {
         );
         yield* engine.dispatch({
           type: "task.update-status",
+          schemaVersion: 1 as const,
           commandId: crypto.randomUUID() as CommandId,
           taskId: task.id,
           status: "done",
@@ -134,6 +145,7 @@ export function createPlanningReactor(deps: {
         );
         yield* engine.dispatch({
           type: "task.update-status",
+          schemaVersion: 1 as const,
           commandId: crypto.randomUUID() as CommandId,
           taskId: task.id,
           status: "done",
@@ -149,51 +161,49 @@ export function createPlanningReactor(deps: {
 
       const taskIds = plan.tasks.map(() => crypto.randomUUID() as TaskId);
 
-      for (let i = 0; i < plan.tasks.length; i++) {
-        const planTask = plan.tasks[i];
+      const validTypes = [
+        "decomposition",
+        "implementation",
+        "review",
+        "testing",
+        "planning",
+      ] as const;
 
+      const proposedTasks = plan.tasks.map((planTask, i) => {
         const resolvedDeps = (planTask.deps ?? [])
           .filter(
             (depIdx) => depIdx >= 0 && depIdx < taskIds.length && depIdx !== i,
           )
           .map((depIdx) => taskIds[depIdx]);
 
-        const validTypes = ["implementation", "review", "testing"] as const;
         const taskType = validTypes.includes(
           planTask.taskType as (typeof validTypes)[number],
         )
           ? (planTask.taskType as (typeof validTypes)[number])
           : "implementation";
 
-        yield* engine.dispatch({
-          type: "task.create",
-          commandId: crypto.randomUUID() as CommandId,
-          taskId: taskIds[i],
+        return {
           taskType,
           title: planTask.title || `Task ${i + 1}`,
           description: planTask.description || "",
           deps: resolvedDeps,
           input: { parentPlanningTaskId: task.id },
-          createdAt: new Date().toISOString(),
-        });
-
-        console.log(
-          `[${REACTOR_NAME}] Created task: "${planTask.title}" (${taskType}) with ${resolvedDeps.length} deps`,
-        );
-      }
+        };
+      });
 
       yield* engine.dispatch({
         type: "task.update-status",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         taskId: task.id,
         status: "done",
         createdAt: new Date().toISOString(),
       });
 
-      yield* completeMeetingForTask(task.input);
+      yield* completeMeetingForTask(task.input, proposedTasks);
 
       console.log(
-        `[${REACTOR_NAME}] Planning task ${task.id} complete. Created ${plan.tasks.length} subtasks.`,
+        `[${REACTOR_NAME}] Planning task ${task.id} complete. Proposed ${plan.tasks.length} subtasks via meeting.complete.`,
       );
     });
 

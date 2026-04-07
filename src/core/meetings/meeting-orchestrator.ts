@@ -47,31 +47,66 @@ const SYNTHESIS_GUIDANCE: Record<string, string> = {
   retrospective: "Focus on actionable process improvements and lessons learned.",
 };
 
+/**
+ * Extract file paths from review meeting agenda items.
+ * Agenda format includes lines like:
+ * - "Work summaries available at: <path>"
+ * - "Reviewer: write your review to <path>"
+ */
+function extractReviewPaths(agenda: readonly string[]): {
+  workSummariesDir: string | null;
+  reviewPath: string | null;
+} {
+  let workSummariesDir: string | null = null;
+  let reviewPath: string | null = null;
+
+  for (const item of agenda) {
+    const summariesMatch = item.match(/Work summaries available at:\s*(.+)/);
+    if (summariesMatch) {
+      workSummariesDir = summariesMatch[1].trim();
+    }
+    const reviewMatch = item.match(/write your review to\s*(.+)/);
+    if (reviewMatch) {
+      reviewPath = reviewMatch[1].trim();
+    }
+  }
+
+  return { workSummariesDir, reviewPath };
+}
+
 export function createMeetingOrchestrator(deps: {
   readonly engine: OrchestrationEngineShape;
   readonly agentService: AgentServiceShape;
 }): MeetingOrchestratorShape {
   const { engine, agentService } = deps;
 
-  const runMeeting: MeetingOrchestratorShape["runMeeting"] = (meetingId) =>
+  /**
+   * Optimized flow for review meetings using file-based context.
+   * 
+   * Instead of O(n*m) LLM calls (participants × agenda items), this uses:
+   * 1. One call to reviewer to read work summaries and write review.md
+   * 2. One call to PM to read review.md and synthesize proposed tasks
+   * 
+   * This dramatically reduces token usage for review meetings.
+   */
+  const runReviewMeeting = (
+    meetingId: MeetingId,
+    meeting: { agenda: readonly string[]; participants: readonly AgentRole[] },
+  ): Effect.Effect<MeetingResult, MeetingError> =>
     Effect.gen(function* () {
-      // 1. Fetch meeting from read model
-      const readModel = yield* engine.getReadModel();
-      const meeting = readModel.meetings.find((m) => m.id === meetingId);
-      if (!meeting) {
-        return yield* Effect.fail(
-          new MeetingError({
-            meetingId,
-            operation: "runMeeting",
-            detail: `Meeting '${meetingId}' not found.`,
-          }),
-        );
+      const { workSummariesDir, reviewPath } = extractReviewPaths(meeting.agenda);
+
+      if (!workSummariesDir || !reviewPath) {
+        // Fall back to standard meeting flow if paths not found
+        console.log(`[meeting-orchestrator] Review meeting ${meetingId} missing file paths, using standard flow`);
+        return yield* runStandardMeeting(meetingId, meeting);
       }
 
-      // 2. Dispatch meeting.start
+      // 1. Dispatch meeting.start
       yield* engine
         .dispatch({
           type: "meeting.start",
+          schemaVersion: 1 as const,
           commandId: crypto.randomUUID() as CommandId,
           meetingId,
           createdAt: new Date().toISOString(),
@@ -87,7 +122,224 @@ export function createMeetingOrchestrator(deps: {
           ),
         );
 
-      // 3. For each agenda item × each participant: collect contributions
+      const agents = yield* agentService.listAgents();
+
+      // 2. Reviewer reads work summaries and writes review
+      const reviewerAgent = agents.find((a) => a.role === "reviewer");
+      let reviewContent = "";
+
+      if (reviewerAgent) {
+        const reviewerPrompt = [
+          `## Code Review Request`,
+          ``,
+          `You are conducting a review of completed work.`,
+          ``,
+          `### Instructions`,
+          `1. Read all work summary files in: ${workSummariesDir}`,
+          `2. Review the code changes referenced in each summary`,
+          `3. Write your comprehensive review to: ${reviewPath}`,
+          ``,
+          `### Review Structure`,
+          `Your review file should include:`,
+          `- **Overall Assessment**: Pass/Fail with brief justification`,
+          `- **Code Quality**: Observations on style, patterns, maintainability`,
+          `- **Concerns**: Any bugs, security issues, or architectural problems`,
+          `- **Improvements**: Suggested follow-up work`,
+          ``,
+          `Focus on actionable feedback. Be specific about file paths and line numbers when noting issues.`,
+        ].join("\n");
+
+        reviewContent = yield* agentService
+          .sendMessage(reviewerAgent.agentId, reviewerPrompt)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new MeetingError({
+                  meetingId,
+                  operation: "meeting.contribute",
+                  detail: `Reviewer failed: ${String(cause)}`,
+                }),
+            ),
+          );
+
+        // Dispatch contribution event
+        yield* engine
+          .dispatch({
+            type: "meeting.contribute",
+            schemaVersion: 1 as const,
+            commandId: crypto.randomUUID() as CommandId,
+            meetingId,
+            agentRole: "reviewer",
+            agendaItemIndex: 0,
+            content: reviewContent,
+            references: [reviewPath],
+            createdAt: new Date().toISOString(),
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new MeetingError({
+                  meetingId,
+                  operation: "meeting.contribute",
+                  detail: String(cause),
+                }),
+            ),
+          );
+      }
+
+      // 3. PM reads review and synthesizes proposed tasks
+      const pmAgent = agents.find((a) => a.role === "pm");
+      if (!pmAgent) {
+        return yield* Effect.fail(
+          new MeetingError({
+            meetingId,
+            operation: "runMeeting",
+            detail: "No PM agent available for meeting synthesis.",
+          }),
+        );
+      }
+
+      const synthesisPrompt = [
+        `## Review Meeting Synthesis`,
+        ``,
+        `You are synthesizing a code review meeting.`,
+        ``,
+        `### Context`,
+        `- Work summaries directory: ${workSummariesDir}`,
+        `- Review file: ${reviewPath}`,
+        ``,
+        `### Instructions`,
+        `1. Read the work summary files to understand what was completed`,
+        `2. Read the review file to understand the reviewer's feedback`,
+        `3. Synthesize into follow-up tasks`,
+        ``,
+        `### Output Format`,
+        `Respond with a JSON block:`,
+        `\`\`\`json`,
+        `{`,
+        `  "summary": "Brief summary of review outcomes",`,
+        `  "proposedTasks": [`,
+        `    {`,
+        `      "taskType": "implementation" | "review" | "testing",`,
+        `      "title": "Task title",`,
+        `      "description": "What needs to be done",`,
+        `      "deps": [],`,
+        `      "input": {}`,
+        `    }`,
+        `  ]`,
+        `}`,
+        `\`\`\``,
+        ``,
+        `Include tasks for: bug fixes, improvements, tech debt, missing tests, incomplete work.`,
+        `If everything looks good and no follow-up is needed, return an empty proposedTasks array.`,
+      ].join("\n");
+
+      const synthesisResult = yield* agentService
+        .sendMessage(pmAgent.agentId, synthesisPrompt)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new MeetingError({
+                meetingId,
+                operation: "meeting.synthesis",
+                detail: `PM synthesis failed: ${String(cause)}`,
+              }),
+          ),
+        );
+
+      // Parse the PM's response
+      let summary = synthesisResult;
+      let proposedTasks: Array<{
+        taskType: "implementation" | "review" | "testing" | "planning" | "decomposition";
+        title: string;
+        description: string;
+        deps: [];
+        input: Record<string, unknown>;
+      }> = [];
+
+      const jsonMatch = synthesisResult.match(/```json\s*([\s\S]*?)```/);
+      if (jsonMatch?.[1]) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1]) as {
+            summary?: string;
+            proposedTasks?: typeof proposedTasks;
+          };
+          if (parsed.summary) summary = parsed.summary;
+          if (Array.isArray(parsed.proposedTasks)) {
+            proposedTasks = parsed.proposedTasks;
+          }
+        } catch {
+          // If parsing fails, use the raw result as summary
+        }
+      }
+
+      // 4. Dispatch meeting.complete
+      yield* engine
+        .dispatch({
+          type: "meeting.complete",
+          schemaVersion: 1 as const,
+          commandId: crypto.randomUUID() as CommandId,
+          meetingId,
+          summary,
+          proposedTasks: proposedTasks.map((t) => ({
+            taskType: t.taskType,
+            title: t.title,
+            description: t.description,
+            deps: t.deps,
+            input: t.input,
+          })),
+          createdAt: new Date().toISOString(),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new MeetingError({
+                meetingId,
+                operation: "meeting.complete",
+                detail: String(cause),
+              }),
+          ),
+        );
+
+      return {
+        meetingId,
+        summary,
+        proposedTaskCount: proposedTasks.length,
+      } satisfies MeetingResult;
+    });
+
+  /**
+   * Standard meeting flow for non-review meetings.
+   * Collects contributions from all participants on all agenda items.
+   */
+  const runStandardMeeting = (
+    meetingId: MeetingId,
+    meeting: { agenda: readonly string[]; participants: readonly AgentRole[]; meetingType?: string },
+  ): Effect.Effect<MeetingResult, MeetingError> =>
+    Effect.gen(function* () {
+      const meetingType = meeting.meetingType ?? "planning";
+
+      // 1. Dispatch meeting.start
+      yield* engine
+        .dispatch({
+          type: "meeting.start",
+          schemaVersion: 1 as const,
+          commandId: crypto.randomUUID() as CommandId,
+          meetingId,
+          createdAt: new Date().toISOString(),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new MeetingError({
+                meetingId,
+                operation: "meeting.start",
+                detail: String(cause),
+              }),
+          ),
+        );
+
+      // 2. For each agenda item × each participant: collect contributions
       const contributions: Array<{
         agentRole: AgentRole;
         agendaItemIndex: number;
@@ -98,25 +350,23 @@ export function createMeetingOrchestrator(deps: {
         const agendaItem = meeting.agenda[itemIdx]!;
 
         for (const role of meeting.participants) {
-          // Find an agent with this role
           const agents = yield* agentService.listAgents();
           const agent = agents.find((a) => a.role === role);
           if (!agent) continue;
 
-          // Build context with prior contributions for this agenda item
           const priorContributions = contributions
             .filter((c) => c.agendaItemIndex === itemIdx)
             .map((c) => `**${c.agentRole}:** ${c.content}`)
             .join("\n\n");
 
           const roleSpecificGuidance =
-            ROLE_GUIDANCE[meeting.meetingType]?.[role] ?? "";
+            ROLE_GUIDANCE[meetingType]?.[role] ?? "";
 
           const prompt = [
             `## Meeting Contribution Request`,
             ``,
             `**Meeting:** ${meetingId}`,
-            `**Meeting Type:** ${meeting.meetingType}`,
+            `**Meeting Type:** ${meetingType}`,
             `**Your Role:** ${role}`,
             `**Agenda Item ${itemIdx + 1}:** ${agendaItem}`,
             ``,
@@ -151,10 +401,10 @@ export function createMeetingOrchestrator(deps: {
             content,
           });
 
-          // Dispatch contribution event
           yield* engine
             .dispatch({
               type: "meeting.contribute",
+              schemaVersion: 1 as const,
               commandId: crypto.randomUUID() as CommandId,
               meetingId,
               agentRole: role,
@@ -176,7 +426,7 @@ export function createMeetingOrchestrator(deps: {
         }
       }
 
-      // 4. Ask PM agent to synthesize contributions into summary + proposed tasks
+      // 3. PM synthesis
       const agents = yield* agentService.listAgents();
       const pmAgent = agents.find((a) => a.role === "pm");
       if (!pmAgent) {
@@ -196,13 +446,13 @@ export function createMeetingOrchestrator(deps: {
         )
         .join("\n\n");
 
-      const typeGuidance = SYNTHESIS_GUIDANCE[meeting.meetingType] ?? "";
+      const typeGuidance = SYNTHESIS_GUIDANCE[meetingType] ?? "";
 
       const synthesisPrompt = [
         `## Meeting Synthesis Request`,
         ``,
         `**Meeting:** ${meetingId}`,
-        `**Meeting Type:** ${meeting.meetingType}`,
+        `**Meeting Type:** ${meetingType}`,
         `**Agenda:** ${meeting.agenda.join(", ")}`,
         ``,
         `### All Contributions`,
@@ -241,7 +491,6 @@ export function createMeetingOrchestrator(deps: {
           ),
         );
 
-      // Parse the PM's response — extract JSON from the result
       let summary = synthesisResult;
       let proposedTasks: Array<{
         taskType: "implementation" | "review" | "testing" | "planning" | "decomposition";
@@ -263,14 +512,14 @@ export function createMeetingOrchestrator(deps: {
             proposedTasks = parsed.proposedTasks;
           }
         } catch {
-          // If parsing fails, use the raw result as summary with no proposed tasks
+          // If parsing fails, use the raw result as summary
         }
       }
 
-      // 5. Dispatch meeting.complete
       yield* engine
         .dispatch({
           type: "meeting.complete",
+          schemaVersion: 1 as const,
           commandId: crypto.randomUUID() as CommandId,
           meetingId,
           summary,
@@ -299,6 +548,32 @@ export function createMeetingOrchestrator(deps: {
         summary,
         proposedTaskCount: proposedTasks.length,
       } satisfies MeetingResult;
+    });
+
+  const runMeeting: MeetingOrchestratorShape["runMeeting"] = (meetingId) =>
+    Effect.gen(function* () {
+      const readModel = yield* engine.getReadModel();
+      const meeting = readModel.meetings.find((m) => m.id === meetingId);
+      if (!meeting) {
+        return yield* Effect.fail(
+          new MeetingError({
+            meetingId,
+            operation: "runMeeting",
+            detail: `Meeting '${meetingId}' not found.`,
+          }),
+        );
+      }
+
+      // Use optimized flow for review meetings
+      if (meeting.meetingType === "review") {
+        return yield* runReviewMeeting(meetingId, meeting);
+      }
+
+      // Standard flow for other meeting types
+      return yield* runStandardMeeting(meetingId, {
+        ...meeting,
+        meetingType: meeting.meetingType,
+      });
     });
 
   return { runMeeting } satisfies MeetingOrchestratorShape;

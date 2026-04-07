@@ -1,13 +1,15 @@
 import { Effect, Fiber, Stream, type Scope } from "effect";
 
-import type { OrchestrationEvent } from "@/shared/types/orchestration";
+import type { OrchestrationEvent, AgentRole } from "@/shared/types/orchestration";
 import type { BusEvent } from "@/shared/types/bus-event";
 import type { AgentId, CommandId, TaskId } from "@/shared/types/base-schemas";
 
 import type { OrchestrationEngineShape } from "../orchestrator/engine";
 import type { AgentServiceShape } from "../agents/service";
+import { AgentQuotaExhaustedError } from "../agents/errors";
 import type { EventBusShape } from "./event-bus";
 import type { ReceiptStoreShape } from "./receipt-store";
+import type { SuspensionStoreShape } from "../memory/suspension-store";
 
 const REACTOR_NAME = "agent-reactor";
 
@@ -22,14 +24,72 @@ export function createAgentReactor(deps: {
   readonly bus: EventBusShape;
   readonly receiptStore: ReceiptStoreShape;
   readonly agentService: AgentServiceShape;
+  readonly suspensionStore: SuspensionStoreShape;
 }): Effect.Effect<Fiber.Fiber<void>, never, Scope.Scope> {
-  const { engine, bus, receiptStore, agentService } = deps;
+  const { engine, bus, receiptStore, agentService, suspensionStore } = deps;
+
+  const handleQuotaExhausted = (
+    error: AgentQuotaExhaustedError,
+    taskId: TaskId,
+    agentId: AgentId,
+    agentRole: AgentRole,
+    prompt: string,
+    taskType: string,
+    taskTitle: string,
+  ) =>
+    Effect.gen(function* () {
+      console.log(`[${REACTOR_NAME}] Quota exhausted for task ${taskId}, suspending...`);
+
+      // Save suspension context for later resume
+      yield* suspensionStore.save({
+        taskId,
+        agentId,
+        agentRole,
+        claudeSessionId: error.sessionId,
+        reason: "quota_exhausted",
+        executionContext: {
+          prompt,
+          taskType,
+          taskTitle,
+        },
+        quotaInfo: {
+          adapterType: error.adapterType,
+          rawMessage: error.rawMessage,
+        },
+      });
+
+      // Emit quota exhausted event via bus
+      yield* bus.publish({
+        type: "agent.quota.exhausted",
+        agentId,
+        sessionId: error.sessionId,
+        taskId,
+        adapterType: error.adapterType,
+        rawMessage: error.rawMessage,
+        occurredAt: error.detectedAt,
+      });
+
+      // Transition task to suspended status
+      yield* engine.dispatch({
+        type: "task.update-status",
+        schemaVersion: 1 as const,
+        commandId: crypto.randomUUID() as CommandId,
+        taskId,
+        status: "suspended",
+        reason: `Quota exhausted: ${error.rawMessage}`,
+        createdAt: new Date().toISOString(),
+      });
+
+      console.log(`[${REACTOR_NAME}] Task ${taskId} suspended due to quota exhaustion`);
+    });
 
   const runAgentExecution = (
     agentId: AgentId,
     taskId: TaskId,
+    agentRole: AgentRole,
     prompt: string,
     taskType: string,
+    taskTitle: string,
   ): void => {
     agentService.markBusy(agentId);
 
@@ -40,21 +100,38 @@ export function createAgentReactor(deps: {
           onSuccess: (output) =>
             engine.dispatch({
               type: "task.update-status",
+              schemaVersion: 1 as const,
               commandId: crypto.randomUUID() as CommandId,
               taskId,
               status: taskType === "planning" ? "review" : "done",
               output,
               createdAt: new Date().toISOString(),
             }),
-          onFailure: (error) =>
-            engine.dispatch({
+          onFailure: (error) => {
+            // Check if this is a quota exhaustion error - suspend instead of fail
+            if (error instanceof AgentQuotaExhaustedError) {
+              return handleQuotaExhausted(
+                error,
+                taskId,
+                agentId,
+                agentRole,
+                prompt,
+                taskType,
+                taskTitle,
+              );
+            }
+
+            // For other errors, mark task as failed
+            return engine.dispatch({
               type: "task.update-status",
+              schemaVersion: 1 as const,
               commandId: crypto.randomUUID() as CommandId,
               taskId,
               status: "failed",
               reason: `Agent error: ${String(error)}`,
               createdAt: new Date().toISOString(),
-            }),
+            });
+          },
         }),
       );
 
@@ -87,6 +164,7 @@ export function createAgentReactor(deps: {
 
       yield* engine.dispatch({
         type: "task.update-status",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         taskId: payload.taskId,
         status: "in_progress",
@@ -134,7 +212,14 @@ export function createAgentReactor(deps: {
         .filter(Boolean)
         .join("\n");
 
-      runAgentExecution(payload.agentId, payload.taskId, prompt, task.taskType);
+      runAgentExecution(
+        payload.agentId,
+        payload.taskId,
+        payload.agentRole,
+        prompt,
+        task.taskType,
+        task.title,
+      );
     });
 
   return bus

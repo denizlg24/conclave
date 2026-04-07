@@ -35,20 +35,44 @@ export function createMeetingReactor(deps: {
 
       const { payload } = event;
 
-      for (const proposed of payload.proposedTasks) {
+      // Pre-generate all TaskIds so index-based dep references can be resolved
+      const proposedTaskIds = payload.proposedTasks.map(
+        () => crypto.randomUUID() as TaskId,
+      );
+
+      for (let i = 0; i < payload.proposedTasks.length; i++) {
+        const proposed = payload.proposedTasks[i]!;
+        const taskId = proposedTaskIds[i]!;
+
+        // proposedTasks.deps uses zero-based index references into proposedTasks;
+        // map each to the pre-generated TaskId at that index.
+        const resolvedDeps = proposed.deps.map((dep) => {
+          const idx = parseInt(dep, 10);
+          if (!isNaN(idx) && idx >= 0 && idx < proposedTaskIds.length) {
+            return proposedTaskIds[idx]!;
+          }
+          return dep as TaskId;
+        });
+
         yield* engine.dispatch({
           type: "task.create",
+          schemaVersion: 1 as const,
           commandId: crypto.randomUUID() as CommandId,
-          taskId: crypto.randomUUID() as TaskId,
+          taskId,
           taskType: proposed.taskType,
           title: proposed.title,
           description: proposed.description,
-          deps: proposed.deps,
+          deps: resolvedDeps,
           input: {
-            ...(typeof proposed.input === "object" && proposed.input !== null
-              ? proposed.input
+            ...(typeof proposed.input === "object" &&
+            proposed.input !== null &&
+            !Array.isArray(proposed.input)
+              ? (proposed.input as Record<string, unknown>)
               : {}),
             proposedByMeeting: payload.meetingId,
+            ...(!("parentPlanningTaskId" in ((proposed.input as Record<string, unknown> | null) ?? {}))
+              ? { parentPlanningTaskId: payload.meetingId }
+              : {}),
           },
           initialStatus: "proposed",
           createdAt: new Date().toISOString(),

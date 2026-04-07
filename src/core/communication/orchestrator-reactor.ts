@@ -45,6 +45,7 @@ export function createOrchestratorReactor(deps: {
 
       yield* engine.dispatch({
         type: "task.assign",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         taskId,
         agentId: agent.agentId,

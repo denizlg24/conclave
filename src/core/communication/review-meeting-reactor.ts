@@ -11,6 +11,7 @@ import type { OrchestrationEngineShape } from "../orchestrator/engine";
 import type { EventBusShape } from "./event-bus";
 import type { ReceiptStoreShape } from "./receipt-store";
 import type { MeetingOrchestratorShape } from "../meetings/meeting-orchestrator";
+import { createReviewFiles } from "./review-files";
 
 const REACTOR_NAME = "review-meeting-reactor";
 
@@ -25,8 +26,10 @@ export function createReviewMeetingReactor(deps: {
   readonly bus: EventBusShape;
   readonly receiptStore: ReceiptStoreShape;
   readonly meetingOrchestrator: MeetingOrchestratorShape;
+  readonly projectPath: string;
 }): Effect.Effect<Fiber.Fiber<void>, never, Scope.Scope> {
-  const { engine, bus, receiptStore, meetingOrchestrator } = deps;
+  const { engine, bus, receiptStore, meetingOrchestrator, projectPath } = deps;
+  const reviewFiles = createReviewFiles();
 
   const reviewedGroups = new Set<string>();
 
@@ -53,6 +56,21 @@ export function createReviewMeetingReactor(deps: {
       )?.parentPlanningTaskId as string | undefined;
       if (!parentPlanningTaskId) return;
 
+      // Write work summary file for this completed task
+      const taskOutput = typeof task.output === "string" ? task.output : JSON.stringify(task.output ?? "");
+      try {
+        reviewFiles.writeWorkSummary(projectPath, parentPlanningTaskId, {
+          taskId: task.id,
+          role: task.ownerRole ?? "unknown",
+          title: task.title,
+          status: task.status as "done" | "failed",
+          output: taskOutput.slice(0, 5000), // Truncate very long outputs
+        });
+        console.log(`[${REACTOR_NAME}] Wrote work summary for task ${task.id}`);
+      } catch (err) {
+        console.error(`[${REACTOR_NAME}] Failed to write work summary for task ${task.id}:`, err);
+      }
+
       if (reviewedGroups.has(parentPlanningTaskId)) return;
 
       const siblings = readModel.tasks.filter((t) => {
@@ -71,21 +89,29 @@ export function createReviewMeetingReactor(deps: {
       const planningTask = readModel.tasks.find(
         (t) => t.id === parentPlanningTaskId,
       );
+      const parentMeeting = !planningTask
+        ? readModel.meetings.find((m) => m.id === parentPlanningTaskId)
+        : undefined;
       const doneCount = siblings.filter((t) => t.status === "done").length;
       const failedCount = siblings.filter((t) => t.status === "failed").length;
 
+      // Build lightweight agenda that references file paths instead of embedding content
+      const workSummariesDir = reviewFiles.getWorkSummariesDir(projectPath, parentPlanningTaskId);
+      const reviewPath = reviewFiles.getReviewPath(projectPath, parentPlanningTaskId);
+      
       const agenda: string[] = [
-        `Review completed work from: ${planningTask?.title ?? "Unknown plan"} (${doneCount} done, ${failedCount} failed)`,
+        `Review completed work from: ${planningTask?.title ?? parentMeeting?.summary?.slice(0, 100) ?? "follow-up tasks"} (${doneCount} done, ${failedCount} failed)`,
+        `Work summaries available at: ${workSummariesDir}`,
         ...siblings.map((t) => {
           const statusLabel = t.status === "done" ? "Completed" : "Failed";
-          const outputSnippet =
-            typeof t.output === "string" ? t.output.slice(0, 300) : "";
-          return `[${statusLabel}] ${t.taskType}: ${t.title}${outputSnippet ? ` — ${outputSnippet}` : ""}`;
+          return `[${statusLabel}] ${t.taskType}: ${t.title} (${t.id})`;
         }),
+        `Reviewer: write your review to ${reviewPath}`,
         "Identify follow-up tasks, improvements, bugs, or technical debt discovered during implementation",
       ];
 
-      const participantRoles = new Set<AgentRole>(["pm"]);
+      // Always include reviewer in review meetings
+      const participantRoles = new Set<AgentRole>(["pm", "reviewer"]);
       for (const sibling of siblings) {
         if (sibling.ownerRole) {
           participantRoles.add(sibling.ownerRole);
@@ -101,6 +127,7 @@ export function createReviewMeetingReactor(deps: {
 
       yield* engine.dispatch({
         type: "meeting.schedule",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         meetingId,
         meetingType: "review",
