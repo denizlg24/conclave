@@ -60,6 +60,7 @@ export function makeCreateTaskCommand(
 ): Extract<OrchestrationCommand, { type: "task.create" }> {
   return {
     type: "task.create",
+    schemaVersion: 1 as const,
     commandId: makeCommandId(),
     taskId: makeTaskId(),
     taskType: "implementation" as TaskType,
@@ -78,6 +79,7 @@ export function makeAssignTaskCommand(
 ): Extract<OrchestrationCommand, { type: "task.assign" }> {
   return {
     type: "task.assign",
+    schemaVersion: 1 as const,
     commandId: makeCommandId(),
     taskId,
     agentId: makeAgentId(),
@@ -94,6 +96,7 @@ export function makeUpdateStatusCommand(
 ): Extract<OrchestrationCommand, { type: "task.update-status" }> {
   return {
     type: "task.update-status",
+    schemaVersion: 1 as const,
     commandId: makeCommandId(),
     taskId,
     status,
@@ -109,6 +112,7 @@ export function makeAddDependencyCommand(
 ): Extract<OrchestrationCommand, { type: "task.add-dependency" }> {
   return {
     type: "task.add-dependency",
+    schemaVersion: 1 as const,
     commandId: makeCommandId(),
     taskId,
     dependsOn,
@@ -124,6 +128,7 @@ export function makeRemoveDependencyCommand(
 ): Extract<OrchestrationCommand, { type: "task.remove-dependency" }> {
   return {
     type: "task.remove-dependency",
+    schemaVersion: 1 as const,
     commandId: makeCommandId(),
     taskId,
     dependsOn,
@@ -137,6 +142,7 @@ export function makeScheduleMeetingCommand(
 ): Extract<OrchestrationCommand, { type: "meeting.schedule" }> {
   return {
     type: "meeting.schedule",
+    schemaVersion: 1 as const,
     commandId: makeCommandId(),
     meetingId: makeMeetingId(),
     meetingType: "planning" as MeetingType,
@@ -155,6 +161,7 @@ export function makeApproveTasksCommand(
 ): Extract<OrchestrationCommand, { type: "meeting.approve-tasks" }> {
   return {
     type: "meeting.approve-tasks",
+    schemaVersion: 1 as const,
     commandId: makeCommandId(),
     meetingId,
     approvedTaskIds,
@@ -200,6 +207,7 @@ export function makeMeeting(
     proposedTaskIds: [],
     approvedTaskIds: [],
     rejectedTaskIds: [],
+    cancelReason: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,
@@ -254,6 +262,7 @@ export function makeTaskCreatedEvent(
       createdAt: now,
     },
     ...overrides,
+    schemaVersion: 1 as const,
   };
 }
 
@@ -282,6 +291,7 @@ export function makeTaskAssignedEvent(
       assignedAt: now,
     },
     ...overrides,
+    schemaVersion: 1 as const,
   };
 }
 
@@ -312,6 +322,7 @@ export function makeTaskStatusUpdatedEvent(
       updatedAt: now,
     },
     ...overrides,
+    schemaVersion: 1 as const,
   };
 }
 
@@ -322,6 +333,7 @@ export function makeTaskDependencyAddedEvent(
 ): Extract<OrchestrationEvent, { type: "task.dependency-added" }> {
   const now = makeIsoDate();
   return {
+    schemaVersion: 1 as const,
     sequence,
     eventId: makeEventId(),
     aggregateKind: "task",
@@ -347,6 +359,7 @@ export function makeTaskDependencyRemovedEvent(
 ): Extract<OrchestrationEvent, { type: "task.dependency-removed" }> {
   const now = makeIsoDate();
   return {
+    schemaVersion: 1 as const,
     sequence,
     eventId: makeEventId(),
     aggregateKind: "task",
@@ -371,6 +384,7 @@ export function makeMeetingScheduledEvent(
 ): Extract<OrchestrationEvent, { type: "meeting.scheduled" }> {
   const now = makeIsoDate();
   return {
+    schemaVersion: 1 as const,
     sequence,
     eventId: makeEventId(),
     aggregateKind: "meeting",
@@ -399,6 +413,7 @@ export function makeMeetingTasksApprovedEvent(
 ): Extract<OrchestrationEvent, { type: "meeting.tasks-approved" }> {
   const now = makeIsoDate();
   return {
+    schemaVersion: 1 as const,
     sequence,
     eventId: makeEventId(),
     aggregateKind: "meeting",

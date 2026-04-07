@@ -25,6 +25,7 @@ export const TaskStatus = Schema.Literals([
   "blocked",
   "proposed",
   "rejected",
+  "suspended",
 ]);
 export type TaskStatus = typeof TaskStatus.Type;
 
@@ -69,6 +70,7 @@ export type AggregateKind = typeof AggregateKind.Type;
 
 const TaskCreateCommand = Schema.Struct({
   type: Schema.Literal("task.create"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   taskId: TaskId,
   taskType: TaskType,
@@ -82,6 +84,7 @@ const TaskCreateCommand = Schema.Struct({
 
 const TaskAssignCommand = Schema.Struct({
   type: Schema.Literal("task.assign"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   taskId: TaskId,
   agentId: AgentId,
@@ -91,6 +94,7 @@ const TaskAssignCommand = Schema.Struct({
 
 const TaskUpdateStatusCommand = Schema.Struct({
   type: Schema.Literal("task.update-status"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   taskId: TaskId,
   status: TaskStatus,
@@ -101,6 +105,7 @@ const TaskUpdateStatusCommand = Schema.Struct({
 
 const TaskAddDependencyCommand = Schema.Struct({
   type: Schema.Literal("task.add-dependency"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   taskId: TaskId,
   dependsOn: TaskId,
@@ -109,6 +114,7 @@ const TaskAddDependencyCommand = Schema.Struct({
 
 const TaskRemoveDependencyCommand = Schema.Struct({
   type: Schema.Literal("task.remove-dependency"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   taskId: TaskId,
   dependsOn: TaskId,
@@ -117,6 +123,7 @@ const TaskRemoveDependencyCommand = Schema.Struct({
 
 const MeetingScheduleCommand = Schema.Struct({
   type: Schema.Literal("meeting.schedule"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   meetingId: MeetingId,
   meetingType: MeetingType,
@@ -127,6 +134,7 @@ const MeetingScheduleCommand = Schema.Struct({
 
 const MeetingApproveTasksCommand = Schema.Struct({
   type: Schema.Literal("meeting.approve-tasks"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   meetingId: MeetingId,
   approvedTaskIds: Schema.Array(TaskId),
@@ -136,6 +144,7 @@ const MeetingApproveTasksCommand = Schema.Struct({
 
 const MeetingStartCommand = Schema.Struct({
   type: Schema.Literal("meeting.start"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   meetingId: MeetingId,
   createdAt: IsoDateTime,
@@ -143,6 +152,7 @@ const MeetingStartCommand = Schema.Struct({
 
 const MeetingContributeCommand = Schema.Struct({
   type: Schema.Literal("meeting.contribute"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   meetingId: MeetingId,
   agentRole: AgentRole,
@@ -154,6 +164,7 @@ const MeetingContributeCommand = Schema.Struct({
 
 const MeetingCompleteCommand = Schema.Struct({
   type: Schema.Literal("meeting.complete"),
+  schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   meetingId: MeetingId,
   summary: Schema.String,
@@ -169,6 +180,15 @@ const MeetingCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const MeetingCancelCommand = Schema.Struct({
+  type: Schema.Literal("meeting.cancel"),
+  schemaVersion: Schema.Literal(1),
+  commandId: CommandId,
+  meetingId: MeetingId,
+  reason: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 export const OrchestrationCommand = Schema.Union([
   TaskCreateCommand,
   TaskAssignCommand,
@@ -180,6 +200,7 @@ export const OrchestrationCommand = Schema.Union([
   MeetingStartCommand,
   MeetingContributeCommand,
   MeetingCompleteCommand,
+  MeetingCancelCommand,
 ]);
 export type OrchestrationCommand = typeof OrchestrationCommand.Type;
 
@@ -194,6 +215,7 @@ export const OrchestrationEventMetadata = Schema.Struct({
 export type OrchestrationEventMetadata = typeof OrchestrationEventMetadata.Type;
 
 const EventBaseFields = {
+  schemaVersion: Schema.Literal(1),
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: AggregateKind,
@@ -293,6 +315,12 @@ export const MeetingCompletedPayload = Schema.Struct({
   completedAt: IsoDateTime,
 });
 
+export const MeetingCancelledPayload = Schema.Struct({
+  meetingId: MeetingId,
+  reason: TrimmedNonEmptyString,
+  cancelledAt: IsoDateTime,
+});
+
 // ---------------------------------------------------------------------------
 // Event types (discriminated union)
 // ---------------------------------------------------------------------------
@@ -308,6 +336,7 @@ export const OrchestrationEventType = Schema.Literals([
   "meeting.started",
   "meeting.contribution-added",
   "meeting.completed",
+  "meeting.cancelled",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -362,6 +391,11 @@ export const OrchestrationEvent = Schema.Union([
     type: Schema.Literal("meeting.completed"),
     payload: MeetingCompletedPayload,
   }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("meeting.cancelled"),
+    payload: MeetingCancelledPayload,
+  }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
 
@@ -401,6 +435,7 @@ export const OrchestrationMeeting = Schema.Struct({
   status: MeetingStatus,
   contributions: Schema.Array(MeetingContribution),
   summary: Schema.NullOr(Schema.String),
+  cancelReason: Schema.NullOr(Schema.String),
   proposedTaskIds: Schema.Array(TaskId),
   approvedTaskIds: Schema.Array(TaskId),
   rejectedTaskIds: Schema.Array(TaskId),

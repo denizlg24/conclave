@@ -190,6 +190,7 @@ export function projectEvent(
         proposedTaskIds: [],
         approvedTaskIds: [],
         rejectedTaskIds: [],
+        cancelReason: null,
         createdAt: payload.scheduledAt,
         updatedAt: payload.scheduledAt,
       };
@@ -250,6 +251,18 @@ export function projectEvent(
           summary: payload.summary,
           proposedTaskIds: [...payload.proposedTaskIds],
           updatedAt: payload.completedAt,
+        }),
+      };
+    }
+
+    case "meeting.cancelled": {
+      const { payload } = event;
+      return {
+        ...base,
+        meetings: updateMeeting(base.meetings, payload.meetingId, {
+          status: "cancelled",
+          cancelReason: payload.reason,
+          updatedAt: payload.cancelledAt,
         }),
       };
     }

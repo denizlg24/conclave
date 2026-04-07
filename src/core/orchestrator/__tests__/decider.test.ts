@@ -290,7 +290,7 @@ describe("decideOrchestrationCommand", () => {
         }
       }
 
-      const terminalStatuses: TaskStatus[] = ["done", "failed"];
+      const terminalStatuses: TaskStatus[] = ["done"];
       for (const terminal of terminalStatuses) {
         test(`rejects transition from terminal state ${terminal}`, async () => {
           const task = makeTask({ id: makeTaskId("task"), status: terminal });
@@ -308,6 +308,18 @@ describe("decideOrchestrationCommand", () => {
           }
         });
       }
+
+      test("allows retry from failed state to pending", async () => {
+        const task = makeTask({ id: makeTaskId("task"), status: "failed" });
+        const command = makeUpdateStatusCommand(task.id, "pending");
+        const readModel = makeReadModelWithTasks([task]);
+
+        const exit = await Effect.runPromiseExit(
+          decideOrchestrationCommand({ command, readModel }),
+        );
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+      });
 
       test("rejects invalid pending -> done transition", async () => {
         const task = makeTask({ id: makeTaskId("task"), status: "pending" });

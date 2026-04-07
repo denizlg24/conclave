@@ -28,6 +28,7 @@ function withEventBase(input: {
   readonly metadata?: OrchestrationEvent["metadata"];
 }): Omit<OrchestrationEvent, "sequence" | "type" | "payload"> {
   return {
+    schemaVersion: 1 as const,
     eventId: crypto.randomUUID() as EventId,
     aggregateKind: input.aggregateKind,
     aggregateId: input.aggregateId,
@@ -43,13 +44,14 @@ function withEventBase(input: {
 const VALID_STATUS_TRANSITIONS: Record<string, ReadonlyArray<string>> = {
   pending: ["assigned", "blocked", "failed"],
   assigned: ["in_progress", "blocked", "failed"],
-  in_progress: ["review", "done", "failed", "blocked"],
+  in_progress: ["review", "done", "failed", "blocked", "suspended"],
   review: ["done", "failed", "in_progress"],
   blocked: ["pending", "assigned", "failed"],
   done: [],
-  failed: [],
-  proposed: ["pending", "blocked", "rejected"],
+  failed: ["pending"],
+  proposed: ["pending", "blocked", "failed"],
   rejected: [],
+  suspended: ["in_progress", "pending", "failed"],
 };
 
 export const decideOrchestrationCommand = Effect.fn(
@@ -307,7 +309,7 @@ export const decideOrchestrationCommand = Effect.fn(
         });
       }
 
-      // Transition rejected tasks: proposed → rejected
+      // Transition rejected tasks: proposed → failed
       for (const taskId of command.rejectedTaskIds) {
         events.push({
           ...withEventBase({
@@ -320,7 +322,7 @@ export const decideOrchestrationCommand = Effect.fn(
           payload: {
             taskId,
             previousStatus: "proposed",
-            status: "rejected",
+            status: "failed",
             reason: `Rejected via meeting '${command.meetingId}'`,
             updatedAt: command.createdAt,
           },
@@ -403,6 +405,30 @@ export const decideOrchestrationCommand = Effect.fn(
           proposedTaskIds: [],
           proposedTasks: command.proposedTasks,
           completedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "meeting.cancel": {
+      yield* requireMeetingStatus({
+        readModel,
+        command,
+        meetingId: command.meetingId,
+        allowed: ["scheduled", "in_progress"],
+      });
+
+      return {
+        ...withEventBase({
+          aggregateKind: "meeting",
+          aggregateId: command.meetingId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "meeting.cancelled" as const,
+        payload: {
+          meetingId: command.meetingId,
+          reason: command.reason,
+          cancelledAt: command.createdAt,
         },
       };
     }
