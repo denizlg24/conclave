@@ -7,12 +7,12 @@ import type {
   TokenUsage,
 } from "@/shared/types/agent-runtime";
 
-import type { AgentAdapterShape, AgentSession } from "./adapter";
+import type { AgentAdapterShape, AgentSession, QuotaExhaustedDetector, QuotaExhaustedCheckResult } from "./adapter";
 import {
   AgentAdapterError,
   AgentSessionNotFoundError,
   AgentSpawnError,
-  AgentBudgetExceededError,
+  AgentQuotaExhaustedError,
 } from "./errors";
 
 // ---------------------------------------------------------------------------
@@ -31,6 +31,45 @@ const ZERO_USAGE: TokenUsage = {
 };
 
 const nowIso = () => new Date().toISOString();
+
+// ---------------------------------------------------------------------------
+// Claude Code Quota Exhausted Detector
+// ---------------------------------------------------------------------------
+
+/**
+ * Patterns that indicate Claude Code quota/credits exhaustion.
+ * These are checked against both stdout and stderr output.
+ */
+const CLAUDE_QUOTA_PATTERNS: readonly RegExp[] = [
+  /you'?re out of extra usage/i,
+  /out of credits/i,
+  /usage limit reached/i,
+  /rate limit exceeded/i,
+  /quota exceeded/i,
+  /insufficient credits/i,
+  /billing.*limit/i,
+  /subscription.*expired/i,
+  /plan.*limit.*reached/i,
+];
+
+export const claudeCodeQuotaDetector: QuotaExhaustedDetector = {
+  adapterType: "claude-code",
+  check: (content: string): QuotaExhaustedCheckResult => {
+    for (const pattern of CLAUDE_QUOTA_PATTERNS) {
+      const match = content.match(pattern);
+      if (match) {
+        return {
+          isExhausted: true,
+          rawMessage: match[0],
+        };
+      }
+    }
+    return {
+      isExhausted: false,
+      rawMessage: null,
+    };
+  },
+};
 
 function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   return {
@@ -151,9 +190,10 @@ function parseRawLine(line: string): ParsedEvent | null {
 
 function buildClaudeArgs(
   config: AgentRoleConfig,
-  prompt: string,
   resumeSessionId: string | null,
 ): string[] {
+  // NOTE: Prompt is NOT included in CLI args to avoid ENAMETOOLONG on Windows.
+  // The prompt is passed via stdin instead (see runClaudeProcess).
   const args = [
     "--print",
     "--output-format",
@@ -161,6 +201,7 @@ function buildClaudeArgs(
     "--verbose",
     "--model",
     config.model,
+    "-p", // Read prompt from stdin
   ];
 
   if (config.allowedTools.length > 0) {
@@ -173,7 +214,6 @@ function buildClaudeArgs(
     args.push("--system-prompt", config.systemPrompt);
   }
 
-  args.push(prompt);
   return args;
 }
 
@@ -257,12 +297,12 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
       config: AgentRoleConfig,
       prompt: string,
       resumeSessionId: string | null,
-    ): Effect.Effect<string, AgentAdapterError | AgentSpawnError> =>
+    ): Effect.Effect<string, AgentAdapterError | AgentSpawnError | AgentQuotaExhaustedError> =>
       Effect.gen(function* () {
-        const args = buildClaudeArgs(config, prompt, resumeSessionId);
+        const args = buildClaudeArgs(config, resumeSessionId);
 
         console.log(`[claude-adapter] HOME=${process.env.HOME}, USERPROFILE=${process.env.USERPROFILE}`);
-        console.log(`[claude-adapter] Spawning claude (cwd: ${config.workingDirectory})`);
+        console.log(`[claude-adapter] Spawning claude (cwd: ${config.workingDirectory}), promptLength: ${prompt.length}`);
 
         const spawnEnv = Object.create(null) as Record<string, string>;
         for (const [k, v] of Object.entries(process.env)) {
@@ -283,7 +323,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
               env: spawnEnv,
               stdout: "pipe",
               stderr: "pipe",
-              stdin: "ignore",
+              stdin: "pipe",
             }),
           catch: (err) => {
             console.error(`[claude-adapter] Spawn failed for ${agentId}:`, String(err));
@@ -293,6 +333,21 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
               detail: String(err),
             });
           },
+        });
+
+        // Write prompt to stdin and close the stream
+        // Bun's stdin is a FileSink with write() and end() methods
+        const stdinSink = proc.stdin;
+        yield* Effect.try({
+          try: () => {
+            stdinSink.write(prompt);
+            stdinSink.end();
+          },
+          catch: (err) => new AgentSpawnError({
+            agentId,
+            command: "stdin write",
+            detail: `Failed to write prompt to stdin: ${String(err)}`,
+          }),
         });
 
         console.log(`[claude-adapter] Process spawned for ${agentId}, PID: ${proc.pid}`);
@@ -433,19 +488,62 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
             if (exitCode !== 0 && !resultText) {
               const stderrText = await new Response(stderr).text();
               console.error(`[claude-adapter] stderr for ${agentId}:`, stderrText);
+              
+              // Check for quota exhaustion in stderr
+              const quotaCheck = claudeCodeQuotaDetector.check(stderrText);
+              if (quotaCheck.isExhausted) {
+                throw new AgentQuotaExhaustedError({
+                  agentId,
+                  sessionId: detectedSessionId,
+                  adapterType: "claude-code",
+                  rawMessage: quotaCheck.rawMessage ?? stderrText,
+                  detectedAt: nowIso(),
+                });
+              }
+              
               throw new Error(
                 `Claude exited with code ${exitCode}: ${stderrText}`,
               );
+            }
+            
+            // Also check the result text for quota messages (sometimes embedded in output)
+            const resultQuotaCheck = claudeCodeQuotaDetector.check(resultText);
+            if (resultQuotaCheck.isExhausted) {
+              throw new AgentQuotaExhaustedError({
+                agentId,
+                sessionId: detectedSessionId,
+                adapterType: "claude-code",
+                rawMessage: resultQuotaCheck.rawMessage ?? resultText,
+                detectedAt: nowIso(),
+              });
             }
 
             return resultText;
           },
           catch: (err) => {
-            console.error(`[claude-adapter] runClaudeProcess error for ${agentId}:`, String(err));
+            // If it's already an AgentQuotaExhaustedError, propagate it as-is
+            if (err instanceof AgentQuotaExhaustedError) {
+              return err;
+            }
+            
+            // Check error message for quota exhaustion patterns
+            const errorMessage = String(err);
+            const quotaCheck = claudeCodeQuotaDetector.check(errorMessage);
+            if (quotaCheck.isExhausted) {
+              return new AgentQuotaExhaustedError({
+                agentId,
+                sessionId: "",
+                adapterType: "claude-code",
+                rawMessage: quotaCheck.rawMessage ?? errorMessage,
+                detectedAt: nowIso(),
+              });
+            }
+            
+            console.error(`[claude-adapter] runClaudeProcess error for ${agentId}:`, errorMessage);
             return new AgentAdapterError({
               agentId,
               operation: "runClaudeProcess",
-              detail: String(err),
+              detail: errorMessage,
             });
           },
         });
@@ -508,9 +606,10 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
       agentId,
       prompt,
       taskId,
+      resumeSessionId,
     ) =>
       Effect.gen(function* () {
-        console.log(`[claude-adapter] sendMessage called for ${agentId}, taskId: ${taskId}`);
+        console.log(`[claude-adapter] sendMessage called for ${agentId}, taskId: ${taskId}, resumeSessionId: ${resumeSessionId ?? "none"}`);
         const session = yield* getSessionOrFail(agentId);
 
         // // Budget checks
@@ -529,16 +628,20 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
         //   );
         // }
 
+        // Use explicit resumeSessionId if provided (for resuming suspended tasks),
+        // otherwise fall back to the session's current claude session ID
+        const effectiveSessionId = resumeSessionId ?? session.claudeSessionId;
+
         yield* emit({
           type: "agent.turn.started",
           agentId,
-          sessionId: session.claudeSessionId,
+          sessionId: effectiveSessionId,
           taskId,
           prompt,
           occurredAt: nowIso(),
         });
 
-        const resumeId = session.claudeSessionId || null;
+        const resumeId = effectiveSessionId || null;
         const result = yield* runClaudeProcess(
           agentId,
           session.config,
@@ -607,6 +710,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
       getSession,
       listSessions,
       streamEvents,
+      quotaDetector: claudeCodeQuotaDetector,
     } satisfies AgentAdapterShape;
   });
 }

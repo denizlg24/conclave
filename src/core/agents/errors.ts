@@ -31,8 +31,27 @@ export class AgentBudgetExceededError extends Data.TaggedError(
   readonly current: number;
 }> {}
 
+/**
+ * Error indicating that the external provider's usage quota has been exhausted.
+ * This is a recoverable error - tasks should be suspended rather than failed.
+ */
+export class AgentQuotaExhaustedError extends Data.TaggedError(
+  "AgentQuotaExhaustedError",
+)<{
+  readonly agentId: string;
+  readonly sessionId: string;
+  readonly adapterType: string;
+  readonly rawMessage: string;
+  readonly detectedAt: string;
+}> {
+  get isRecoverable(): boolean {
+    return true;
+  }
+}
+
 export type AgentError =
   | AgentAdapterError
   | AgentSessionNotFoundError
   | AgentSpawnError
-  | AgentBudgetExceededError;
+  | AgentBudgetExceededError
+  | AgentQuotaExhaustedError;

@@ -174,6 +174,16 @@ export const AgentError = Schema.Struct({
   occurredAt: IsoDateTime,
 });
 
+export const AgentQuotaExhausted = Schema.Struct({
+  type: Schema.Literal("agent.quota.exhausted"),
+  agentId: AgentId,
+  sessionId: Schema.String,
+  taskId: Schema.NullOr(TaskId),
+  adapterType: Schema.String,
+  rawMessage: Schema.String,
+  occurredAt: IsoDateTime,
+});
+
 export const AgentRuntimeEvent = Schema.Union([
   AgentSessionStarted,
   AgentTurnStarted,
@@ -182,5 +192,6 @@ export const AgentRuntimeEvent = Schema.Union([
   AgentTurnCompleted,
   AgentSessionEnded,
   AgentError,
+  AgentQuotaExhausted,
 ]);
 export type AgentRuntimeEvent = typeof AgentRuntimeEvent.Type;

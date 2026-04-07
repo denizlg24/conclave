@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import { Effect, Exit, Cause, Stream, Queue } from "effect";
 
 import { createAgentService } from "../service";
-import type { AgentAdapterShape, AgentSession } from "../adapter";
+import type { AgentAdapterShape, AgentSession, QuotaExhaustedDetector } from "../adapter";
 import { AgentAdapterError } from "../errors";
 import { resetCounters, makeAgentId } from "@/test-utils/factories";
 import type { AgentId, TaskId } from "@/shared/types/base-schemas";
@@ -109,6 +109,11 @@ function createMockAdapter(
 
   const streamEvents: AgentAdapterShape["streamEvents"] = Stream.empty;
 
+  const quotaDetector: QuotaExhaustedDetector = {
+    adapterType: "mock",
+    check: () => ({ isExhausted: false, rawMessage: null }),
+  };
+
   return {
     startSession: overrides.startSession ?? startSession,
     sendMessage: overrides.sendMessage ?? sendMessage,
@@ -117,6 +122,7 @@ function createMockAdapter(
     getSession: overrides.getSession ?? getSession,
     listSessions: overrides.listSessions ?? listSessions,
     streamEvents: overrides.streamEvents ?? streamEvents,
+    quotaDetector: overrides.quotaDetector ?? quotaDetector,
   };
 }
 

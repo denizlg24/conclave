@@ -28,6 +28,19 @@ const DEFAULT_ROLE_CONFIGS: Record<
       "- Tasks should have clear, specific descriptions of WHAT to implement.",
       "- Identify dependencies between tasks (which tasks must complete before others can start).",
       "",
+      "## Review Requirement (MANDATORY)",
+      "Every task decomposition MUST include at least one 'review' type task.",
+      "The review task should:",
+      "- Depend on all implementation/testing tasks (so it runs after they complete)",
+      "- Have a clear description of what should be reviewed",
+      "- Be the final task in the dependency chain",
+      "",
+      "Example pattern:",
+      "1. implementation task A",
+      "2. implementation task B (may depend on A)",
+      "3. testing task C (depends on A and/or B)",
+      "4. review task D (depends on all above - this is REQUIRED)",
+      "",
       "## Output Format",
       "You MUST end your response with a JSON block wrapped in ```json fences.",
       "The JSON must conform to this exact schema:",
@@ -52,6 +65,7 @@ const DEFAULT_ROLE_CONFIGS: Record<
       "- Think through the decomposition carefully before producing the JSON.",
       "- Write your planning rationale to .conclave/planning/ first, then output the JSON.",
       "- Every response MUST end with the tasks JSON block. No exceptions.",
+      "- NEVER forget to include a review task - it ensures quality control.",
     ].join("\n"),
     allowedTools: ["Read", "Write", "Glob", "Grep", "WebSearch", "WebFetch"],
     maxTokens: 16384,
@@ -130,6 +144,7 @@ export interface AgentServiceShape {
     agentId: AgentId,
     prompt: string,
     taskId?: TaskId | null,
+    resumeSessionId?: string | null,
   ) => Effect.Effect<string, AgentError>;
 
   readonly interruptAgent: (
@@ -212,7 +227,8 @@ export function createAgentService(
     agentId,
     prompt,
     taskId,
-  ) => adapter.sendMessage(agentId, prompt, taskId ?? null);
+    resumeSessionId,
+  ) => adapter.sendMessage(agentId, prompt, taskId ?? null, resumeSessionId ?? null);
 
   const interruptAgent: AgentServiceShape["interruptAgent"] = (agentId) =>
     adapter.interrupt(agentId);

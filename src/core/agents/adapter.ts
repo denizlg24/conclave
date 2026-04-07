@@ -22,6 +22,29 @@ export interface AgentSession {
   readonly startedAt: string;
 }
 
+/**
+ * Result of checking for quota exhaustion in adapter output.
+ * Each adapter implements its own detection logic.
+ */
+export interface QuotaExhaustedCheckResult {
+  readonly isExhausted: boolean;
+  readonly rawMessage: string | null;
+}
+
+/**
+ * Interface for detecting quota exhaustion from adapter-specific output.
+ * Each adapter type implements its own patterns.
+ */
+export interface QuotaExhaustedDetector {
+  readonly adapterType: string;
+  /**
+   * Check if the given output or error message indicates quota exhaustion.
+   * @param content - stdout/stderr content or error message to check
+   * @returns Result indicating if quota is exhausted and the raw message
+   */
+  readonly check: (content: string) => QuotaExhaustedCheckResult;
+}
+
 export interface AgentAdapterShape {
   readonly startSession: (
     agentId: AgentId,
@@ -32,6 +55,7 @@ export interface AgentAdapterShape {
     agentId: AgentId,
     prompt: string,
     taskId: TaskId | null,
+    resumeSessionId?: string | null,
   ) => Effect.Effect<string, AgentError>;
 
   readonly interrupt: (agentId: AgentId) => Effect.Effect<void, AgentError>;
@@ -43,4 +67,10 @@ export interface AgentAdapterShape {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<AgentSession>>;
 
   readonly streamEvents: Stream.Stream<AgentRuntimeEvent>;
+
+  /**
+   * Quota detector for this adapter type.
+   * Used to check if output/errors indicate quota exhaustion.
+   */
+  readonly quotaDetector: QuotaExhaustedDetector;
 }
