@@ -85,6 +85,15 @@ export type SerializedAgentEvent = {
   durationMs?: number;
 };
 
+export type SerializedSuspendedTask = {
+  taskId: string;
+  agentId: string;
+  agentRole: string;
+  suspendedAt: string;
+  reason: string;
+  taskTitle: string;
+};
+
 export type ConclaveRPCSchema = {
   bun: {
     requests: {
@@ -164,6 +173,18 @@ export type ConclaveRPCSchema = {
         };
         response: { meetingId: string };
       };
+      getSuspendedTasks: {
+        params: Record<string, never>;
+        response: SerializedSuspendedTask[];
+      };
+      resumeSuspendedTask: {
+        params: { taskId: string };
+        response: { success: boolean };
+      };
+      retryTask: {
+        params: { taskId: string };
+        response: { success: boolean };
+      };
     };
     messages: Record<never, unknown>;
   };
@@ -175,6 +196,13 @@ export type ConclaveRPCSchema = {
       onProjectLoaded: SerializedProject;
       onAgentEvent: SerializedAgentEvent;
       onAgentRoster: SerializedAgentRoster;
+      onQuotaExhausted: {
+        agentId: string;
+        taskId: string;
+        adapterType: string;
+        rawMessage: string;
+        occurredAt: string;
+      };
     };
   };
 };

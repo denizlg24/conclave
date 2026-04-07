@@ -24,6 +24,8 @@ import { createAgentService } from "@/core/agents/service";
 import { createClaudeCodeAdapter } from "@/core/agents/claude-code-adapter";
 import { createPersistentEventStore } from "@/core/memory/persistent-event-store";
 import { createDecisionLogStore } from "@/core/memory/decision-log-store";
+import { createSuspensionStore } from "@/core/memory/suspension-store";
+import { createResumeHandler } from "./resume-handler";
 
 import type {
   SerializedAgentRoster,
@@ -119,11 +121,32 @@ export interface ConclaveShape {
     participants: string[];
   }) => Promise<{ meetingId: string }>;
 
+  readonly getSuspendedTasks: () => Promise<Array<{
+    taskId: string;
+    agentId: string;
+    agentRole: string;
+    suspendedAt: string;
+    reason: string;
+    taskTitle: string;
+  }>>;
+
+  readonly resumeSuspendedTask: (taskId: string) => Promise<{ success: boolean }>;
+
+  readonly retryTask: (taskId: string) => Promise<{ success: boolean }>;
+
   readonly onEvent: (callback: (event: SerializedEvent, model: SerializedReadModel) => void) => void;
 
   readonly onAgentEvent: (callback: (event: AgentRuntimeEventRecord) => void) => void;
 
   readonly onAgentRoster: (callback: (roster: SerializedAgentRoster) => void) => void;
+
+  readonly onQuotaExhausted: (callback: (info: {
+    agentId: string;
+    taskId: string;
+    adapterType: string;
+    rawMessage: string;
+    occurredAt: string;
+  }) => void) => void;
 
   readonly shutdown: () => Promise<void>;
 }
@@ -144,6 +167,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     const bus = yield* createEventBus();
     const eventStore = yield* createPersistentEventStore({ storagePath: memoryPath });
     const decisionLog = yield* createDecisionLogStore({ storagePath: memoryPath });
+    const suspensionStore = yield* createSuspensionStore({ storagePath: memoryPath });
     const engine = yield* createOrchestrationEngine({ eventBus: bus, eventStore });
     const receiptStore = yield* createReceiptStore();
 
@@ -169,6 +193,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
       bus,
       receiptStore,
       agentService,
+      suspensionStore,
     }).pipe(Effect.provideService(Scope.Scope, scope));
 
     yield* createMeetingReactor({
@@ -190,6 +215,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
       bus,
       receiptStore,
       meetingOrchestrator,
+      projectPath,
     }).pipe(Effect.provideService(Scope.Scope, scope));
 
     const eventCallbacks: Array<
@@ -200,6 +226,9 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     > = [];
     const rosterCallbacks: Array<
       (roster: SerializedAgentRoster) => void
+    > = [];
+    const quotaExhaustedCallbacks: Array<
+      (info: { agentId: string; taskId: string; adapterType: string; rawMessage: string; occurredAt: string }) => void
     > = [];
 
     agentService.onRosterChange(() => {
@@ -243,15 +272,29 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
           for (const cb of agentEventCallbacks) {
             cb(record);
           }
+          
+          // Special handling for quota exhaustion events
+          if (event.type === "agent.quota.exhausted") {
+            const quotaEvent = event as unknown as {
+              agentId: string;
+              taskId: string;
+              adapterType: string;
+              rawMessage: string;
+              occurredAt: string;
+            };
+            for (const cb of quotaExhaustedCallbacks) {
+              cb(quotaEvent);
+            }
+          }
         }),
       ),
       Effect.forkScoped,
     ).pipe(Effect.provideService(Scope.Scope, scope));
 
-    return { engine, bus, agentService, decisionLog, eventCallbacks, agentEventCallbacks, rosterCallbacks };
+    return { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks };
   });
 
-  const { engine, bus, agentService, decisionLog, eventCallbacks, agentEventCallbacks, rosterCallbacks } = await Effect.runPromise(program);
+  const { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks } = await Effect.runPromise(program);
 
   const existingDecisions = await Effect.runPromise(decisionLog.getAll());
   console.log(`[conclave] Memory initialized: ${existingDecisions.length} decision log entries loaded`);
@@ -291,6 +334,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     await Effect.runPromise(
       engine.dispatch({
         type: "meeting.schedule",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         meetingId: meetingId as MeetingId,
         meetingType: "planning",
@@ -303,6 +347,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     await Effect.runPromise(
       engine.dispatch({
         type: "meeting.start",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         meetingId: meetingId as MeetingId,
         createdAt: new Date().toISOString(),
@@ -312,6 +357,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     await Effect.runPromise(
       engine.dispatch({
         type: "task.create",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         taskId: taskId as TaskId,
         taskType: "planning" as const,
@@ -336,6 +382,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     await Effect.runPromise(
       engine.dispatch({
         type: "task.create",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         taskId: taskId as TaskId,
         taskType: params.taskType as "implementation",
@@ -357,6 +404,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     await Effect.runPromise(
       engine.dispatch({
         type: "task.update-status",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         taskId: params.taskId as TaskId,
         status: params.status as "pending",
@@ -375,6 +423,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     await Effect.runPromise(
       engine.dispatch({
         type: "meeting.approve-tasks",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         meetingId: params.meetingId as MeetingId,
         approvedTaskIds: params.approvedTaskIds as TaskId[],
@@ -394,6 +443,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     await Effect.runPromise(
       engine.dispatch({
         type: "meeting.schedule",
+        schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         meetingId: meetingId as MeetingId,
         meetingType: params.meetingType as "planning",
@@ -404,6 +454,33 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     );
     return { meetingId };
   };
+
+  const getSuspendedTasks = async (): Promise<Array<{
+    taskId: string;
+    agentId: string;
+    agentRole: string;
+    suspendedAt: string;
+    reason: string;
+    taskTitle: string;
+  }>> => {
+    const suspensions = await Effect.runPromise(suspensionStore.getAllPending());
+    return suspensions.map((s) => ({
+      taskId: s.taskId,
+      agentId: s.agentId,
+      agentRole: s.agentRole,
+      suspendedAt: s.suspendedAt,
+      reason: s.reason,
+      taskTitle: s.executionContext.taskTitle,
+    }));
+  };
+
+  const { resumeSuspendedTask, retryTask } = createResumeHandler({
+    engine,
+    agentService,
+    suspensionStore,
+    bus,
+    projectPath,
+  });
 
   const onEvent = (
     callback: (event: SerializedEvent, model: SerializedReadModel) => void,
@@ -421,6 +498,18 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     callback: (roster: SerializedAgentRoster) => void,
   ) => {
     rosterCallbacks.push(callback);
+  };
+
+  const onQuotaExhausted = (
+    callback: (info: {
+      agentId: string;
+      taskId: string;
+      adapterType: string;
+      rawMessage: string;
+      occurredAt: string;
+    }) => void,
+  ) => {
+    quotaExhaustedCallbacks.push(callback);
   };
 
   const shutdown = async () => {
@@ -443,9 +532,13 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     updateTaskStatus,
     approveProposedTasks,
     scheduleMeeting,
+    getSuspendedTasks,
+    resumeSuspendedTask,
+    retryTask,
     onEvent,
     onAgentEvent,
     onAgentRoster,
+    onQuotaExhausted,
     shutdown,
   };
 }

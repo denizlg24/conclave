@@ -39,7 +39,7 @@ let activeProject: ProjectMeta | null = null;
 let getWebviewRpc: (() => ReturnType<typeof BrowserView.defineRPC<ConclaveRPCSchema>> | null) | null = null;
 
 function sendToWebview(
-  method: "onStateChanged" | "onEvent" | "onProjectLoaded" | "onAgentEvent" | "onAgentRoster",
+  method: "onStateChanged" | "onEvent" | "onProjectLoaded" | "onAgentEvent" | "onAgentRoster" | "onQuotaExhausted",
   data: unknown,
 ): void {
   const rpc = getWebviewRpc?.();
@@ -59,6 +59,9 @@ function sendToWebview(
       break;
     case "onAgentRoster":
       rpc.send.onAgentRoster(data as Parameters<typeof rpc.send.onAgentRoster>[0]);
+      break;
+    case "onQuotaExhausted":
+      rpc.send.onQuotaExhausted(data as Parameters<typeof rpc.send.onQuotaExhausted>[0]);
       break;
   }
 }
@@ -114,6 +117,10 @@ async function loadProjectAndBootstrap(
     sendToWebview("onAgentRoster", roster);
   });
 
+  conclave.onQuotaExhausted((info) => {
+    sendToWebview("onQuotaExhausted", info);
+  });
+
   const initialRoster = await conclave.getAgentRoster();
   sendToWebview("onAgentRoster", initialRoster);
 
@@ -123,6 +130,7 @@ async function loadProjectAndBootstrap(
 const url = await getMainViewUrl();
 
 const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
+  maxRequestTime: 5 * 60 * 1000,
   handlers: {
     requests: {
       listProjects: () => {
@@ -190,6 +198,18 @@ const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
       scheduleMeeting: (params) => {
         if (!conclave) throw new Error("No project loaded");
         return conclave.scheduleMeeting(params);
+      },
+      getSuspendedTasks: () => {
+        if (!conclave) throw new Error("No project loaded");
+        return conclave.getSuspendedTasks();
+      },
+      resumeSuspendedTask: ({ taskId }) => {
+        if (!conclave) throw new Error("No project loaded");
+        return conclave.resumeSuspendedTask(taskId);
+      },
+      retryTask: ({ taskId }) => {
+        if (!conclave) throw new Error("No project loaded");
+        return conclave.retryTask(taskId);
       },
     },
     messages: {},
