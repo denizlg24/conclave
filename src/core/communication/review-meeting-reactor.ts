@@ -57,14 +57,17 @@ export function createReviewMeetingReactor(deps: {
       if (!parentPlanningTaskId) return;
 
       // Write work summary file for this completed task
-      const taskOutput = typeof task.output === "string" ? task.output : JSON.stringify(task.output ?? "");
+      const taskOutput =
+        typeof task.output === "string"
+          ? task.output
+          : JSON.stringify(task.output ?? "", null, 2);
       try {
         reviewFiles.writeWorkSummary(projectPath, parentPlanningTaskId, {
           taskId: task.id,
           role: task.ownerRole ?? "unknown",
           title: task.title,
           status: task.status as "done" | "failed",
-          output: taskOutput.slice(0, 5000), // Truncate very long outputs
+          output: taskOutput,
         });
         console.log(`[${REACTOR_NAME}] Wrote work summary for task ${task.id}`);
       } catch (err) {

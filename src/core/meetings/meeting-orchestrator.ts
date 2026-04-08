@@ -1,11 +1,14 @@
 import { Effect } from "effect";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-import type { AgentRole } from "@/shared/types/orchestration";
+import type { AgentRole, MeetingTaskDependencyRef } from "@/shared/types/orchestration";
 import type { CommandId, MeetingId } from "@/shared/types/base-schemas";
 
 import type { OrchestrationEngineShape } from "../orchestrator/engine";
 import type { AgentServiceShape } from "../agents/service";
 import { MeetingError } from "../communication/errors";
+import { decodeMeetingSynthesisOutput } from "../communication/llm-output";
 
 export interface MeetingResult {
   readonly meetingId: MeetingId;
@@ -72,6 +75,96 @@ function extractReviewPaths(agenda: readonly string[]): {
   }
 
   return { workSummariesDir, reviewPath };
+}
+
+function ensureMeetingArtifactsDir(workingDirectory: string, meetingId: MeetingId): string {
+  const dir = join(workingDirectory, ".conclave", "meetings", meetingId);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function writeMeetingContribution(
+  artifactsDir: string,
+  agendaItemIndex: number,
+  role: AgentRole,
+  content: string,
+): string {
+  const filePath = join(
+    artifactsDir,
+    `agenda-${agendaItemIndex + 1}-${role}.md`,
+  );
+  writeFileSync(filePath, content, "utf-8");
+  return filePath;
+}
+
+function writeMeetingManifest(
+  artifactsDir: string,
+  meeting: {
+    meetingType?: string;
+    agenda: readonly string[];
+    participants: readonly AgentRole[];
+  },
+  contributions: ReadonlyArray<{
+    agentRole: AgentRole;
+    agendaItemIndex: number;
+    contentPath: string;
+  }>,
+): string {
+  const manifestPath = join(artifactsDir, "manifest.json");
+  writeFileSync(
+    manifestPath,
+    JSON.stringify(
+      {
+        meetingType: meeting.meetingType ?? "planning",
+        agenda: meeting.agenda,
+        participants: meeting.participants,
+        contributions,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  return manifestPath;
+}
+
+function writeArtifact(filePath: string, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content, "utf-8");
+}
+
+function normalizeMeetingSynthesis(output: string): {
+  readonly summary: string;
+  readonly proposedTasks: ReadonlyArray<{
+    taskType: "implementation" | "review" | "testing" | "planning" | "decomposition";
+    title: string;
+    description: string;
+    deps: ReadonlyArray<MeetingTaskDependencyRef>;
+    input: unknown;
+  }>;
+} {
+  const decoded = decodeMeetingSynthesisOutput(output);
+  if (!decoded.data) {
+    const summary = output.trim() || "Meeting completed.";
+    return {
+      summary,
+      proposedTasks: [],
+    };
+  }
+
+  return {
+    summary: decoded.data.summary,
+    proposedTasks: decoded.data.proposedTasks.map((task) => ({
+      taskType: task.taskType,
+      title: task.title,
+      description: task.description,
+      deps: [...task.deps],
+      input:
+        typeof task.input === "object" && task.input !== null
+          ? task.input
+          : {},
+    })),
+  };
 }
 
 export function createMeetingOrchestrator(deps: {
@@ -162,6 +255,8 @@ export function createMeetingOrchestrator(deps: {
             ),
           );
 
+        writeArtifact(reviewPath, reviewContent);
+
         // Dispatch contribution event
         yield* engine
           .dispatch({
@@ -220,7 +315,7 @@ export function createMeetingOrchestrator(deps: {
         `  "summary": "Brief summary of review outcomes",`,
         `  "proposedTasks": [`,
         `    {`,
-        `      "taskType": "implementation" | "review" | "testing",`,
+        `      "taskType": "implementation" | "review" | "testing" | "planning" | "decomposition",`,
         `      "title": "Task title",`,
         `      "description": "What needs to be done",`,
         `      "deps": [],`,
@@ -230,6 +325,7 @@ export function createMeetingOrchestrator(deps: {
         `}`,
         `\`\`\``,
         ``,
+        `Use zero-based indexes in deps to express dependencies between proposedTasks in this response.`,
         `Include tasks for: bug fixes, improvements, tech debt, missing tests, incomplete work.`,
         `If everything looks good and no follow-up is needed, return an empty proposedTasks array.`,
       ].join("\n");
@@ -247,31 +343,9 @@ export function createMeetingOrchestrator(deps: {
           ),
         );
 
-      // Parse the PM's response
-      let summary = synthesisResult;
-      let proposedTasks: Array<{
-        taskType: "implementation" | "review" | "testing" | "planning" | "decomposition";
-        title: string;
-        description: string;
-        deps: [];
-        input: Record<string, unknown>;
-      }> = [];
+      writeArtifact(join(dirname(reviewPath), "meeting-synthesis.md"), synthesisResult);
 
-      const jsonMatch = synthesisResult.match(/```json\s*([\s\S]*?)```/);
-      if (jsonMatch?.[1]) {
-        try {
-          const parsed = JSON.parse(jsonMatch[1]) as {
-            summary?: string;
-            proposedTasks?: typeof proposedTasks;
-          };
-          if (parsed.summary) summary = parsed.summary;
-          if (Array.isArray(parsed.proposedTasks)) {
-            proposedTasks = parsed.proposedTasks;
-          }
-        } catch {
-          // If parsing fails, use the raw result as summary
-        }
-      }
+      const { summary, proposedTasks } = normalizeMeetingSynthesis(synthesisResult);
 
       // 4. Dispatch meeting.complete
       yield* engine
@@ -344,20 +418,20 @@ export function createMeetingOrchestrator(deps: {
         agentRole: AgentRole;
         agendaItemIndex: number;
         content: string;
+        contentPath: string;
       }> = [];
+      const agents = yield* agentService.listAgents();
+      const workingDirectory =
+        agents[0]?.config.workingDirectory ??
+        process.cwd();
+      const artifactsDir = ensureMeetingArtifactsDir(workingDirectory, meetingId);
 
       for (let itemIdx = 0; itemIdx < meeting.agenda.length; itemIdx++) {
         const agendaItem = meeting.agenda[itemIdx]!;
 
         for (const role of meeting.participants) {
-          const agents = yield* agentService.listAgents();
           const agent = agents.find((a) => a.role === role);
           if (!agent) continue;
-
-          const priorContributions = contributions
-            .filter((c) => c.agendaItemIndex === itemIdx)
-            .map((c) => `**${c.agentRole}:** ${c.content}`)
-            .join("\n\n");
 
           const roleSpecificGuidance =
             ROLE_GUIDANCE[meetingType]?.[role] ?? "";
@@ -370,9 +444,6 @@ export function createMeetingOrchestrator(deps: {
             `**Your Role:** ${role}`,
             `**Agenda Item ${itemIdx + 1}:** ${agendaItem}`,
             ``,
-            priorContributions
-              ? `### Prior Contributions\n${priorContributions}\n`
-              : "",
             roleSpecificGuidance
               ? `### Your Focus\n${roleSpecificGuidance}\n`
               : "",
@@ -392,13 +463,21 @@ export function createMeetingOrchestrator(deps: {
                     operation: "meeting.contribute",
                     detail: `Agent '${agent.agentId}' (${role}) failed: ${String(cause)}`,
                   }),
-              ),
-            );
+            ),
+          );
+
+          const contentPath = writeMeetingContribution(
+            artifactsDir,
+            itemIdx,
+            role,
+            content,
+          );
 
           contributions.push({
             agentRole: role,
             agendaItemIndex: itemIdx,
             content,
+            contentPath,
           });
 
           yield* engine
@@ -410,7 +489,7 @@ export function createMeetingOrchestrator(deps: {
               agentRole: role,
               agendaItemIndex: itemIdx,
               content,
-              references: [],
+              references: [contentPath],
               createdAt: new Date().toISOString(),
             })
             .pipe(
@@ -427,7 +506,6 @@ export function createMeetingOrchestrator(deps: {
       }
 
       // 3. PM synthesis
-      const agents = yield* agentService.listAgents();
       const pmAgent = agents.find((a) => a.role === "pm");
       if (!pmAgent) {
         return yield* Effect.fail(
@@ -439,12 +517,15 @@ export function createMeetingOrchestrator(deps: {
         );
       }
 
-      const allContributions = contributions
-        .map(
-          (c) =>
-            `**${c.agentRole}** on agenda item ${c.agendaItemIndex + 1}: ${c.content}`,
-        )
-        .join("\n\n");
+      const manifestPath = writeMeetingManifest(
+        artifactsDir,
+        meeting,
+        contributions.map((contribution) => ({
+          agentRole: contribution.agentRole,
+          agendaItemIndex: contribution.agendaItemIndex,
+          contentPath: contribution.contentPath,
+        })),
+      );
 
       const typeGuidance = SYNTHESIS_GUIDANCE[meetingType] ?? "";
 
@@ -455,8 +536,8 @@ export function createMeetingOrchestrator(deps: {
         `**Meeting Type:** ${meetingType}`,
         `**Agenda:** ${meeting.agenda.join(", ")}`,
         ``,
-        `### All Contributions`,
-        allContributions,
+        `Read the structured meeting manifest at: ${manifestPath}`,
+        `Contribution files live in: ${artifactsDir}`,
         ``,
         typeGuidance ? `### Synthesis Focus\n${typeGuidance}\n` : "",
         `Please synthesize all contributions into:`,
@@ -476,6 +557,8 @@ export function createMeetingOrchestrator(deps: {
         `  ]`,
         `}`,
         `\`\`\``,
+        ``,
+        `Use zero-based indexes in deps to express dependencies between proposedTasks in this response.`,
       ].join("\n");
 
       const synthesisResult = yield* agentService
@@ -491,30 +574,9 @@ export function createMeetingOrchestrator(deps: {
           ),
         );
 
-      let summary = synthesisResult;
-      let proposedTasks: Array<{
-        taskType: "implementation" | "review" | "testing" | "planning" | "decomposition";
-        title: string;
-        description: string;
-        deps: [];
-        input: Record<string, unknown>;
-      }> = [];
+      writeArtifact(join(artifactsDir, "meeting-synthesis.md"), synthesisResult);
 
-      const jsonMatch = synthesisResult.match(/```json\s*([\s\S]*?)```/);
-      if (jsonMatch?.[1]) {
-        try {
-          const parsed = JSON.parse(jsonMatch[1]) as {
-            summary?: string;
-            proposedTasks?: typeof proposedTasks;
-          };
-          if (parsed.summary) summary = parsed.summary;
-          if (Array.isArray(parsed.proposedTasks)) {
-            proposedTasks = parsed.proposedTasks;
-          }
-        } catch {
-          // If parsing fails, use the raw result as summary
-        }
-      }
+      const { summary, proposedTasks } = normalizeMeetingSynthesis(synthesisResult);
 
       yield* engine
         .dispatch({
