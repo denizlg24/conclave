@@ -40,10 +40,12 @@ export function GameHUD() {
     activeProject,
     approveProposedTasks,
     resumeSuspendedTask,
+    unloadProject,
   } = useConclave();
   const [activePanel, setActivePanel] = useState<Panel>(null);
   const [highlightMeetingId, setHighlightMeetingId] = useState<string | null>(null);
   const [showCommand, setShowCommand] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const partyLogRef = useRef<HTMLDivElement>(null);
 
@@ -145,6 +147,61 @@ export function GameHUD() {
             >
               {activeProject.name}
             </span>
+          )}
+          {activeProject && !showExitConfirm && (
+            <button
+              onClick={() => setShowExitConfirm(true)}
+              className="rpg-mono text-[10px] px-2 py-0.5 cursor-pointer transition-all"
+              style={{
+                background: "rgba(196, 92, 74, 0.1)",
+                border: "1px solid rgba(196, 92, 74, 0.3)",
+                color: "var(--rpg-text-muted)",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(196, 92, 74, 0.2)";
+                e.currentTarget.style.borderColor = "rgba(196, 92, 74, 0.6)";
+                e.currentTarget.style.color = "#c45c4a";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(196, 92, 74, 0.1)";
+                e.currentTarget.style.borderColor = "rgba(196, 92, 74, 0.3)";
+                e.currentTarget.style.color = "var(--rpg-text-muted)";
+              }}
+            >
+              EXIT
+            </button>
+          )}
+          {showExitConfirm && (
+            <>
+              <span
+                className="rpg-mono text-[10px]"
+                style={{ color: "#c45c4a" }}
+              >
+                ABANDON CAMPAIGN?
+              </span>
+              <button
+                onClick={() => unloadProject()}
+                className="rpg-mono text-[10px] px-2 py-0.5 cursor-pointer transition-all"
+                style={{
+                  background: "rgba(196, 92, 74, 0.2)",
+                  border: "1px solid rgba(196, 92, 74, 0.5)",
+                  color: "#c45c4a",
+                }}
+              >
+                CONFIRM
+              </button>
+              <button
+                onClick={() => setShowExitConfirm(false)}
+                className="rpg-mono text-[10px] px-2 py-0.5 cursor-pointer transition-all"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--rpg-border)",
+                  color: "var(--rpg-text-muted)",
+                }}
+              >
+                CANCEL
+              </button>
+            </>
           )}
         </div>
         <div className="flex items-center gap-3">
@@ -254,7 +311,8 @@ export function GameHUD() {
 
           <button
             onClick={() => setShowCommand(true)}
-            className="rpg-action-btn primary-action"
+            disabled={showExitConfirm}
+            className="rpg-action-btn primary-action disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span className="hotkey">SPACE</span>
             COMMAND
@@ -445,8 +503,7 @@ export function GameHUD() {
                       {e.type === "agent.output.produced" && e.content && (
                         <div className="log-output">
                           <p className="rpg-mono text-[10px] whitespace-pre-wrap break-words">
-                            {e.content.slice(0, 400)}
-                            {(e.content.length ?? 0) > 400 ? "\u2026" : ""}
+                            {e.content}
                           </p>
                         </div>
                       )}

@@ -279,8 +279,7 @@ function AgentLogEntry({
           </div>
           <div className="log-output">
             <p className="rpg-mono text-[11px] whitespace-pre-wrap break-words">
-              {event.content?.slice(0, 500)}
-              {(event.content?.length ?? 0) > 500 ? "\u2026" : ""}
+              {event.content}
             </p>
           </div>
         </div>

@@ -8,8 +8,15 @@ import {
   type ReactNode,
 } from "react";
 import { Electroview } from "electrobun/view";
+import {
+  ADAPTER_OPTIONS,
+  DEFAULT_ADAPTER_TYPE,
+  type AdapterType,
+} from "../../shared/types/adapter";
 import type {
   ConclaveRPCSchema,
+  SerializedAdapterOption,
+  SerializedAdapterState,
   SerializedAgentEvent,
   SerializedAgentInfo,
   SerializedAgentRoster,
@@ -29,6 +36,8 @@ type QuotaExhaustedInfo = {
 
 interface ConclaveState {
   activeProject: SerializedProject | null;
+  selectedAdapter: AdapterType;
+  availableAdapters: SerializedAdapterOption[];
   readModel: SerializedReadModel | null;
   events: SerializedEvent[];
   agentEvents: SerializedAgentEvent[];
@@ -45,6 +54,7 @@ interface ConclaveActions {
   openDirectory: (path: string) => Promise<SerializedProject>;
   browseForDirectory: () => Promise<string | null>;
   loadProject: (projectId: string) => Promise<void>;
+  setSelectedAdapter: (adapterType: AdapterType) => Promise<void>;
   sendCommand: (message: string) => Promise<{ taskId: string; meetingId: string }>;
   createTask: (params: {
     taskType: string;
@@ -71,6 +81,8 @@ interface ConclaveActions {
   resumeSuspendedTask: (taskId: string) => Promise<void>;
   dismissQuotaExhausted: () => void;
   refresh: () => Promise<void>;
+  deleteProject: (projectId: string) => Promise<void>;
+  unloadProject: () => Promise<void>;
 }
 
 type ConclaveContextValue = ConclaveState & ConclaveActions;
@@ -84,6 +96,8 @@ interface RPCClient {
   browseForDirectory: (params: Record<string, never>) => Promise<string | null>;
   loadProject: (params: { projectId: string }) => Promise<{ success: boolean }>;
   getActiveProject: (params: Record<string, never>) => Promise<SerializedProject | null>;
+  getAdapterState: (params: Record<string, never>) => Promise<SerializedAdapterState>;
+  setAdapter: (params: { adapterType: AdapterType }) => Promise<SerializedAdapterState>;
   getAgentRoster: (params: Record<string, never>) => Promise<SerializedAgentRoster>;
   sendCommand: (params: { message: string }) => Promise<{ taskId: string; meetingId: string }>;
   getState: (params: Record<string, never>) => Promise<SerializedReadModel>;
@@ -111,11 +125,15 @@ interface RPCClient {
   }) => Promise<{ meetingId: string }>;
   getSuspendedTasks: (params: Record<string, never>) => Promise<SerializedSuspendedTask[]>;
   resumeSuspendedTask: (params: { taskId: string }) => Promise<{ success: boolean }>;
+  deleteProject: (params: { projectId: string }) => Promise<{ success: boolean }>;
+  unloadProject: (params: Record<string, never>) => Promise<{ success: boolean }>;
 }
 
 export function ConclaveProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ConclaveState>({
     activeProject: null,
+    selectedAdapter: DEFAULT_ADAPTER_TYPE,
+    availableAdapters: [...ADAPTER_OPTIONS],
     readModel: null,
     events: [],
     agentEvents: [],
@@ -155,7 +173,7 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
           onAgentEvent: (agentEvent) => {
             setState((prev) => ({
               ...prev,
-              agentEvents: [...prev.agentEvents, agentEvent].slice(-500),
+              agentEvents: [...prev.agentEvents, agentEvent].slice(-5000),
             }));
           },
           onAgentRoster: (roster) => {
@@ -182,9 +200,10 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     const init = async (retries = 3, delayMs = 500) => {
       for (let i = 0; i < retries; i++) {
         try {
-          const [activeProject, projects] = await Promise.all([
+          const [activeProject, projects, adapterState] = await Promise.all([
             client.getActiveProject({} as Record<string, never>),
             client.listProjects({} as Record<string, never>),
+            client.getAdapterState({} as Record<string, never>),
           ]);
 
           if (activeProject) {
@@ -197,6 +216,8 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
             setState((prev) => ({
               ...prev,
               activeProject,
+              selectedAdapter: adapterState.selectedAdapter,
+              availableAdapters: adapterState.availableAdapters,
               readModel: model,
               events,
               agentRoster: roster.agents,
@@ -205,7 +226,13 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
               connected: true,
             }));
           } else {
-            setState((prev) => ({ ...prev, projects, connected: true }));
+            setState((prev) => ({
+              ...prev,
+              selectedAdapter: adapterState.selectedAdapter,
+              availableAdapters: adapterState.availableAdapters,
+              projects,
+              connected: true,
+            }));
           }
           return;
         } catch {
@@ -277,6 +304,17 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
       events,
       agentEvents: [],
       suspendedTasks,
+    }));
+  }, []);
+
+  const setSelectedAdapter = useCallback(async (adapterType: AdapterType) => {
+    const client = rpcClientRef.current;
+    if (!client) throw new Error("Not connected");
+    const adapterState = await client.setAdapter({ adapterType });
+    setState((prev) => ({
+      ...prev,
+      selectedAdapter: adapterState.selectedAdapter,
+      availableAdapters: adapterState.availableAdapters,
     }));
   }, []);
 
@@ -356,6 +394,30 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, suspendedTasks: tasks }));
   }, []);
 
+  const deleteProject = useCallback(async (projectId: string) => {
+    const client = rpcClientRef.current;
+    if (!client) throw new Error("Not connected");
+    await client.deleteProject({ projectId });
+    await listProjects();
+  }, [listProjects]);
+
+  const unloadProject = useCallback(async () => {
+    const client = rpcClientRef.current;
+    if (!client) throw new Error("Not connected");
+    await client.unloadProject({} as Record<string, never>);
+    const projects = await client.listProjects({} as Record<string, never>);
+    setState((prev) => ({
+      ...prev,
+      activeProject: null,
+      readModel: null,
+      events: [],
+      agentEvents: [],
+      agentRoster: [],
+      suspendedTasks: [],
+      projects,
+    }));
+  }, []);
+
   const dismissQuotaExhausted = useCallback(() => {
     setState((prev) => ({ ...prev, quotaExhaustedInfo: null }));
   }, []);
@@ -367,6 +429,7 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     openDirectory,
     browseForDirectory,
     loadProject,
+    setSelectedAdapter,
     sendCommand,
     createTask,
     updateTaskStatus,
@@ -376,6 +439,8 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     resumeSuspendedTask,
     dismissQuotaExhausted,
     refresh,
+    deleteProject,
+    unloadProject,
   };
 
   return (
