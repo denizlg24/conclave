@@ -4,7 +4,10 @@ import type { CommandId, TaskId } from "@/shared/types/base-schemas";
 import { AgentQuotaExhaustedError } from "@/core/agents/errors";
 import type { OrchestrationEngineShape } from "@/core/orchestrator/engine";
 import type { AgentServiceShape } from "@/core/agents/service";
-import type { SuspensionStoreShape } from "@/core/memory/suspension-store";
+import type {
+  SuspensionContext,
+  SuspensionStoreShape,
+} from "@/core/memory/suspension-store";
 import type { EventBusShape } from "@/core/communication/event-bus";
 
 export type ResumeHandlerDeps = {
@@ -17,6 +20,39 @@ export type ResumeHandlerDeps = {
 
 export function createResumeHandler(deps: ResumeHandlerDeps) {
   const { engine, agentService, suspensionStore, bus, projectPath } = deps;
+
+  const buildResumePrompt = (
+    taskId: string,
+    taskType: string,
+    suspension: SuspensionContext,
+  ): string =>
+    [
+      `## Task Continuation`,
+      ``,
+      suspension.sessionId
+        ? `You were previously working on this task but were interrupted due to quota exhaustion. Your prior adapter session is being resumed, so you may already have partial context from before.`
+        : `You were previously working on this task but were interrupted. Your prior session could not be resumed, so this is a fresh start — use the original task context below to reconstruct where you were.`,
+      ``,
+      `**Task ID:** ${taskId}`,
+      `**Type:** ${taskType}`,
+      `**Title:** ${suspension.executionContext.taskTitle}`,
+      ``,
+      `## Original Task Prompt`,
+      ``,
+      suspension.executionContext.prompt,
+      ...(suspension.executionContext.partialOutput
+        ? [
+            ``,
+            `## Partial Output (from interrupted execution)`,
+            ``,
+            suspension.executionContext.partialOutput,
+            ``,
+            `Resume from where this left off, or use it as context to avoid repeating already-completed steps.`,
+          ]
+        : []),
+      ``,
+      `Continue the task and provide your output as structured JSON.`,
+    ].join("\n");
 
   const resumeSuspendedTask = async (
     taskId: string,
@@ -80,41 +116,14 @@ export function createResumeHandler(deps: ResumeHandlerDeps) {
 
     agentService.markBusy(agentId);
 
-    const isSessionResume = !!suspension.claudeSessionId;
-    const prompt = [
-      `## Task Continuation`,
-      ``,
-      isSessionResume
-        ? `You were previously working on this task but were interrupted due to quota exhaustion. Your prior Claude session is being resumed — you may already have partial context from before.`
-        : `You were previously working on this task but were interrupted. Your prior session could not be resumed, so this is a fresh start — use the original task context below to reconstruct where you were.`,
-      ``,
-      `**Task ID:** ${taskId}`,
-      `**Type:** ${taskType}`,
-      `**Title:** ${suspension.executionContext.taskTitle}`,
-      ``,
-      `## Original Task Prompt`,
-      ``,
-      suspension.executionContext.prompt,
-      ...(suspension.executionContext.partialOutput
-        ? [
-            ``,
-            `## Partial Output (from interrupted execution)`,
-            ``,
-            suspension.executionContext.partialOutput,
-            ``,
-            `Resume from where this left off, or use it as context to avoid repeating already-completed steps.`,
-          ]
-        : []),
-      ``,
-      `Continue the task and provide your output as structured JSON.`,
-    ].join("\n");
+    const prompt = buildResumePrompt(taskId, taskType, suspension);
 
     // suspensionStore.remove() is intentionally deferred to onSuccess.
     // The record must remain intact so that any failure path can re-suspend the task
     // without needing to re-save — the record is already there.
     Effect.runPromise(
       agentService
-        .sendMessage(agentId, prompt, taskId as TaskId, suspension.claudeSessionId)
+        .sendMessage(agentId, prompt, taskId as TaskId, suspension.sessionId)
         .pipe(
           Effect.matchEffect({
             onSuccess: (output) =>
@@ -142,12 +151,13 @@ export function createResumeHandler(deps: ResumeHandlerDeps) {
                     taskId: taskId as TaskId,
                     agentId,
                     agentRole,
-                    claudeSessionId: error.sessionId,
+                    sessionId: error.sessionId,
                     reason: "quota_exhausted",
                     executionContext: {
-                      prompt,
+                      prompt: suspension.executionContext.prompt,
                       taskType,
                       taskTitle: suspension.executionContext.taskTitle,
+                      partialOutput: suspension.executionContext.partialOutput,
                     },
                     quotaInfo: {
                       adapterType: error.adapterType,
@@ -156,6 +166,7 @@ export function createResumeHandler(deps: ResumeHandlerDeps) {
                   });
                   yield* bus.publish({
                     type: "agent.quota.exhausted",
+                    schemaVersion: 1 as const,
                     agentId,
                     sessionId: error.sessionId,
                     taskId: taskId as TaskId,

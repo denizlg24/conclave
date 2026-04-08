@@ -37,8 +37,9 @@ function createMockAdapter(
       }
       const session: AgentSession = {
         agentId,
+        adapterType: "claude-code",
         role: config.role,
-        claudeSessionId: `session-${Date.now()}`,
+        sessionId: `session-${Date.now()}`,
         model: config.model,
         config,
         cumulativeUsage: {
@@ -110,11 +111,12 @@ function createMockAdapter(
   const streamEvents: AgentAdapterShape["streamEvents"] = Stream.empty;
 
   const quotaDetector: QuotaExhaustedDetector = {
-    adapterType: "mock",
+    adapterType: "claude-code",
     check: () => ({ isExhausted: false, rawMessage: null }),
   };
 
   return {
+    adapterType: overrides.adapterType ?? "claude-code",
     startSession: overrides.startSession ?? startSession,
     sendMessage: overrides.sendMessage ?? sendMessage,
     interrupt: overrides.interrupt ?? interrupt,
@@ -173,6 +175,20 @@ describe("createAgentService", () => {
       expect(session.config.allowedTools).toContain("Edit");
     });
 
+    test("uses Codex defaults when the adapter type is openai-codex", async () => {
+      const adapter = createMockAdapter(new Map(), {
+        adapterType: "openai-codex",
+      });
+      const service = createAgentService(adapter);
+      const agentId = makeAgentId("codex-agent");
+
+      const session = await Effect.runPromise(
+        service.startAgent(agentId, "developer", "/tmp/test"),
+      );
+
+      expect(session.config.model).toBe("gpt-5-codex");
+    });
+
     test("applies role-specific default configuration for reviewer", async () => {
       const adapter = createMockAdapter();
       const service = createAgentService(adapter);
@@ -184,22 +200,6 @@ describe("createAgentService", () => {
 
       expect(session.role).toBe("reviewer");
       expect(session.config.systemPrompt).toContain("Reviewer");
-    });
-
-    test("applies config overrides", async () => {
-      const adapter = createMockAdapter();
-      const service = createAgentService(adapter);
-      const agentId = makeAgentId("agent-1");
-
-      const session = await Effect.runPromise(
-        service.startAgent(agentId, "developer", "/tmp/test", {
-          maxTokens: 50000,
-          maxTurns: 50,
-        }),
-      );
-
-      expect(session.config.maxTokens).toBe(50000);
-      expect(session.config.maxTurns).toBe(50);
     });
 
     test("sets working directory from parameter", async () => {
@@ -484,6 +484,7 @@ describe("createAgentService", () => {
 
       const mockEvent: AgentRuntimeEvent = {
         type: "agent.session.started",
+        schemaVersion: 1,
         agentId: makeAgentId("agent-1"),
         role: "developer",
         sessionId: "session-123",

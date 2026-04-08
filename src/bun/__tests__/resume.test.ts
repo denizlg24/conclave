@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import { Effect, Stream } from "effect";
 
 import { createResumeHandler } from "../resume-handler";
-import { AgentAdapterError } from "@/core/agents/errors";
+import { AgentAdapterError, AgentQuotaExhaustedError } from "@/core/agents/errors";
 import {
   resetCounters,
   makeTaskId,
@@ -42,7 +42,7 @@ function makeSuspensionContext(
     taskId,
     agentId: makeAgentId("dev") as AgentId,
     agentRole: "developer",
-    claudeSessionId: "claude-session-abc123",
+    sessionId: "claude-session-abc123",
     suspendedAt: new Date().toISOString(),
     reason: "quota_exhausted",
     executionContext: {
@@ -497,6 +497,83 @@ describe("createResumeHandler", () => {
 
       expect(result.success).toBe(false);
       expect(dispatchCalled).toBe(false);
+    });
+
+    test("preserves the original task prompt when a resumed task hits quota again", async () => {
+      const taskId = makeTaskId("task-6");
+      const agentId = makeAgentId("dev");
+      const suspension = makeSuspensionContext(taskId, {
+        agentId,
+        executionContext: {
+          prompt: "Implement the feature",
+          taskType: "implementation",
+          taskTitle: "Implement feature X",
+          partialOutput: "Completed the parser changes.",
+        },
+      });
+
+      const asyncDone = makeDeferred();
+      let savedExecutionContext: SuspensionContext["executionContext"] | null = null;
+
+      const engine = makeMockEngine({
+        dispatch: () => Effect.succeed({ sequence: 1, events: [] }),
+        getReadModel: () =>
+          Effect.succeed(makeReadModelWithTasks([makeTask({ id: taskId })])),
+      });
+
+      const agentService = makeMockAgentService({
+        getAgent: () => Effect.succeed(makeAgentSession({ agentId })),
+        sendMessage: () =>
+          Effect.fail(
+            new AgentQuotaExhaustedError({
+              agentId,
+              sessionId: "codex-thread-2",
+              adapterType: "openai-codex",
+              rawMessage: "quota exceeded",
+              detectedAt: new Date().toISOString(),
+            }),
+          ),
+        markAvailable: () => asyncDone.resolve(),
+      });
+
+      const suspensionStore = makeMockSuspensionStore({
+        getByTask: () => Effect.succeed(suspension),
+        save: (ctx) => {
+          const savedContext = {
+            ...ctx,
+            id: "saved-id",
+            suspendedAt: new Date().toISOString(),
+          } as SuspensionContext;
+          savedExecutionContext = savedContext.executionContext;
+          return Effect.succeed(savedContext);
+        },
+      });
+
+      const { resumeSuspendedTask } = createResumeHandler({
+        engine,
+        agentService,
+        suspensionStore,
+        bus: makeMockBus(),
+        projectPath: "/tmp/test",
+      });
+
+      const result = await resumeSuspendedTask(taskId);
+      expect(result.success).toBe(true);
+
+      await asyncDone.promise;
+
+      expect(savedExecutionContext).not.toBeNull();
+      if (!savedExecutionContext) {
+        throw new Error("Expected execution context to be saved");
+      }
+      const executionContext = savedExecutionContext as NonNullable<
+        SuspensionContext["executionContext"]
+      >;
+      expect(executionContext.prompt).toBe("Implement the feature");
+      expect(executionContext.prompt).not.toContain("## Task Continuation");
+      expect(executionContext.partialOutput).toBe(
+        "Completed the parser changes.",
+      );
     });
   });
 

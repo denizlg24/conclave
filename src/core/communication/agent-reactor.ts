@@ -28,6 +28,15 @@ export function createAgentReactor(deps: {
 }): Effect.Effect<Fiber.Fiber<void>, never, Scope.Scope> {
   const { engine, bus, receiptStore, agentService, suspensionStore } = deps;
 
+  const publishAgentAvailable = (agentId: AgentId, agentRole: AgentRole) =>
+    bus.publish({
+      type: "agent.became-available",
+      schemaVersion: 1 as const,
+      agentId,
+      agentRole,
+      occurredAt: new Date().toISOString(),
+    });
+
   const handleQuotaExhausted = (
     error: AgentQuotaExhaustedError,
     taskId: TaskId,
@@ -38,6 +47,8 @@ export function createAgentReactor(deps: {
     taskTitle: string,
   ) =>
     Effect.gen(function* () {
+      agentService.markAvailable(agentId);
+      yield* publishAgentAvailable(agentId, agentRole);
       console.log(`[${REACTOR_NAME}] Quota exhausted for task ${taskId}, suspending...`);
 
       // Save suspension context for later resume
@@ -45,7 +56,7 @@ export function createAgentReactor(deps: {
         taskId,
         agentId,
         agentRole,
-        claudeSessionId: error.sessionId,
+        sessionId: error.sessionId,
         reason: "quota_exhausted",
         executionContext: {
           prompt,
@@ -61,6 +72,7 @@ export function createAgentReactor(deps: {
       // Emit quota exhausted event via bus
       yield* bus.publish({
         type: "agent.quota.exhausted",
+        schemaVersion: 1 as const,
         agentId,
         sessionId: error.sessionId,
         taskId,
@@ -98,14 +110,17 @@ export function createAgentReactor(deps: {
       .pipe(
         Effect.matchEffect({
           onSuccess: (output) =>
-            engine.dispatch({
-              type: "task.update-status",
-              schemaVersion: 1 as const,
-              commandId: crypto.randomUUID() as CommandId,
-              taskId,
-              status: taskType === "planning" ? "review" : "done",
-              output,
-              createdAt: new Date().toISOString(),
+            Effect.gen(function* () {
+              yield* publishAgentAvailable(agentId, agentRole);
+              yield* engine.dispatch({
+                type: "task.update-status",
+                schemaVersion: 1 as const,
+                commandId: crypto.randomUUID() as CommandId,
+                taskId,
+                status: taskType === "planning" ? "review" : "done",
+                output,
+                createdAt: new Date().toISOString(),
+              });
             }),
           onFailure: (error) => {
             // Check if this is a quota exhaustion error - suspend instead of fail
@@ -122,14 +137,17 @@ export function createAgentReactor(deps: {
             }
 
             // For other errors, mark task as failed
-            return engine.dispatch({
-              type: "task.update-status",
-              schemaVersion: 1 as const,
-              commandId: crypto.randomUUID() as CommandId,
-              taskId,
-              status: "failed",
-              reason: `Agent error: ${String(error)}`,
-              createdAt: new Date().toISOString(),
+            return Effect.gen(function* () {
+              yield* publishAgentAvailable(agentId, agentRole);
+              yield* engine.dispatch({
+                type: "task.update-status",
+                schemaVersion: 1 as const,
+                commandId: crypto.randomUUID() as CommandId,
+                taskId,
+                status: "failed",
+                reason: `Agent error: ${String(error)}`,
+                createdAt: new Date().toISOString(),
+              });
             });
           },
         }),
@@ -140,12 +158,18 @@ export function createAgentReactor(deps: {
     console.log(`[${REACTOR_NAME}] Starting agent execution for task ${taskId}`);
     Effect.runPromise(effect)
       .then(() => {
-        agentService.markAvailable(agentId);
         console.log(`[${REACTOR_NAME}] Agent execution completed for task ${taskId}`);
       })
       .catch((err) => {
-        agentService.markAvailable(agentId);
+        Effect.runPromise(publishAgentAvailable(agentId, agentRole)).catch(
+          (publishErr) => {
+            console.error(`[${REACTOR_NAME}] Failed to publish agent.became-available:`, publishErr);
+          },
+        );
         console.error(`[${REACTOR_NAME}] Agent execution failed for task ${taskId}:`, err);
+      })
+      .finally(() => {
+        agentService.markAvailable(agentId);
       });
   };
 

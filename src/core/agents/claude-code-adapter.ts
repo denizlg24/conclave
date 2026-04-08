@@ -10,6 +10,7 @@ import type {
 import type { AgentAdapterShape, AgentSession, QuotaExhaustedDetector, QuotaExhaustedCheckResult } from "./adapter";
 import {
   AgentAdapterError,
+  AgentBudgetExceededError,
   AgentSessionNotFoundError,
   AgentSpawnError,
   AgentQuotaExhaustedError,
@@ -384,8 +385,9 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
                     if (block.type === "text" && block.text) {
                       console.log(`[claude-adapter] ${agentId} output: ${block.text.slice(0, 200)}`);
                       Effect.runSync(
-                        emit({
+                      emit({
                           type: "agent.output.produced",
+                          schemaVersion: 1 as const,
                           agentId,
                           sessionId: detectedSessionId,
                           content: block.text,
@@ -402,6 +404,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
                       Effect.runSync(
                         emit({
                           type: "agent.tool.invoked",
+                          schemaVersion: 1 as const,
                           agentId,
                           sessionId: detectedSessionId,
                           toolName: block.name,
@@ -413,21 +416,6 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
                     }
                   }
 
-                  // Accumulate usage
-                  Effect.runSync(
-                    Effect.gen(function* () {
-                      const sessions = yield* Ref.get(sessionsRef);
-                      const session = sessions.get(agentId);
-                      if (session) {
-                        yield* updateSession(agentId, {
-                          cumulativeUsage: addUsage(
-                            session.cumulativeUsage,
-                            parsed.usage,
-                          ),
-                        });
-                      }
-                    }),
-                  );
                   break;
                 }
 
@@ -447,14 +435,14 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
                           cumulativeCostUsd:
                             session.cumulativeCostUsd + parsed.costUsd,
                           turnCount: session.turnCount + parsed.numTurns,
-                          claudeSessionId:
-                            detectedSessionId || session.claudeSessionId,
+                          sessionId: detectedSessionId || session.sessionId,
                           process: null,
                         });
                       }
 
                       yield* emit({
                         type: "agent.turn.completed",
+                        schemaVersion: 1 as const,
                         agentId,
                         sessionId: detectedSessionId,
                         usage: parsed.usage,
@@ -466,6 +454,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
                       if (parsed.isError) {
                         yield* emit({
                           type: "agent.error",
+                          schemaVersion: 1 as const,
                           agentId,
                           sessionId: detectedSessionId,
                           error: parsed.result,
@@ -573,8 +562,9 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
 
         const session: ManagedSession = {
           agentId,
+          adapterType: "claude-code",
           role: config.role,
-          claudeSessionId: "",
+          sessionId: "",
           model: config.model,
           config,
           cumulativeUsage: { ...ZERO_USAGE },
@@ -592,6 +582,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
 
         yield* emit({
           type: "agent.session.started",
+          schemaVersion: 1 as const,
           agentId,
           role: config.role,
           sessionId: "",
@@ -612,28 +603,28 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
         console.log(`[claude-adapter] sendMessage called for ${agentId}, taskId: ${taskId}, resumeSessionId: ${resumeSessionId ?? "none"}`);
         const session = yield* getSessionOrFail(agentId);
 
-        // // Budget checks
-        // if (
-        //   session.config.maxTurns > 0 &&
-        //   session.turnCount >= session.config.maxTurns
-        // ) {
-        //   return yield* Effect.fail(
-        //     new AgentBudgetExceededError({
-        //       agentId,
-        //       sessionId: session.claudeSessionId,
-        //       budgetType: "turns",
-        //       limit: session.config.maxTurns,
-        //       current: session.turnCount,
-        //     }),
-        //   );
-        // }
+        if (
+          session.config.maxTurns > 0 &&
+          session.turnCount >= session.config.maxTurns
+        ) {
+          return yield* Effect.fail(
+            new AgentBudgetExceededError({
+              agentId,
+              sessionId: session.sessionId,
+              budgetType: "turns",
+              limit: session.config.maxTurns,
+              current: session.turnCount,
+            }),
+          );
+        }
 
         // Use explicit resumeSessionId if provided (for resuming suspended tasks),
-        // otherwise fall back to the session's current claude session ID
-        const effectiveSessionId = resumeSessionId ?? session.claudeSessionId;
+        // otherwise fall back to the session's current adapter session ID
+        const effectiveSessionId = resumeSessionId ?? session.sessionId;
 
         yield* emit({
           type: "agent.turn.started",
+          schemaVersion: 1 as const,
           agentId,
           sessionId: effectiveSessionId,
           taskId,
@@ -672,8 +663,9 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
 
         yield* emit({
           type: "agent.session.ended",
+          schemaVersion: 1 as const,
           agentId,
-          sessionId: session.claudeSessionId,
+          sessionId: session.sessionId,
           totalUsage: session.cumulativeUsage,
           totalCostUsd: session.cumulativeCostUsd,
           reason: "stopped",
@@ -703,6 +695,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
       Stream.fromQueue(eventQueue);
 
     return {
+      adapterType: "claude-code",
       startSession,
       sendMessage,
       interrupt,
