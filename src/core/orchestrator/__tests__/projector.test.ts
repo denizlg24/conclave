@@ -215,6 +215,23 @@ describe("projectEvent", () => {
       expect(result.tasks.find((t) => t.id === taskId)?.status).toBe("in_progress");
     });
 
+    test("keeps pending transitions blocked while dependencies remain unresolved", () => {
+      const depTaskId = makeTaskId("dep-task") as TaskId;
+      const taskId = makeTaskId("review-task") as TaskId;
+      const dependency = makeTask({ id: depTaskId, status: "pending" });
+      const task = makeTask({
+        id: taskId,
+        status: "proposed",
+        deps: [depTaskId],
+      });
+      const model = makeReadModelWithTasks([dependency, task]);
+      const event = makeTaskStatusUpdatedEvent(taskId, "proposed", "pending", 1);
+
+      const result = projectEvent(model, event);
+
+      expect(result.tasks.find((candidate) => candidate.id === taskId)?.status).toBe("blocked");
+    });
+
     test("stores output when provided", () => {
       const taskId = makeTaskId("task-1");
       const task = makeTask({ id: taskId, status: "in_progress" });

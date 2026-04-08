@@ -2,55 +2,14 @@ import { Effect, Fiber, Stream, type Scope } from "effect";
 
 import type { OrchestrationEvent } from "@/shared/types/orchestration";
 import type { BusEvent } from "@/shared/types/bus-event";
-import type { CommandId, MeetingId, TaskId } from "@/shared/types/base-schemas";
+import type { CommandId, MeetingId } from "@/shared/types/base-schemas";
 
 import type { OrchestrationEngineShape } from "../orchestrator/engine";
 import type { EventBusShape } from "./event-bus";
 import type { ReceiptStoreShape } from "./receipt-store";
+import { decodePlanningOutput } from "./llm-output";
 
 const REACTOR_NAME = "planning-reactor";
-
-interface ParsedTask {
-  title: string;
-  description: string;
-  taskType: string;
-  deps: number[];
-}
-
-interface ParsedPlan {
-  tasks: ParsedTask[];
-}
-
-function extractPlanFromOutput(output: string): ParsedPlan | null {
-  const jsonBlockRegex = /```json\s*([\s\S]*?)```/g;
-  let lastMatch: RegExpExecArray | null = null;
-  let match: RegExpExecArray | null;
-
-  while ((match = jsonBlockRegex.exec(output)) !== null) {
-    lastMatch = match;
-  }
-
-  if (!lastMatch) {
-    try {
-      const parsed = JSON.parse(output.trim());
-      if (parsed && Array.isArray(parsed.tasks)) {
-        return parsed as ParsedPlan;
-      }
-    } catch {}
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(lastMatch[1].trim());
-    if (parsed && Array.isArray(parsed.tasks)) {
-      return parsed as ParsedPlan;
-    }
-  } catch {
-    console.warn(`[${REACTOR_NAME}] Failed to parse JSON block from PM output`);
-  }
-
-  return null;
-}
 
 function isTaskStatusUpdated(
   event: BusEvent,
@@ -71,7 +30,7 @@ export function createPlanningReactor(deps: {
       taskType: "decomposition" | "implementation" | "review" | "testing" | "planning";
       title: string;
       description: string;
-      deps: TaskId[];
+      deps: number[];
       input: unknown;
     }> = [],
   ) =>
@@ -138,55 +97,81 @@ export function createPlanningReactor(deps: {
         return;
       }
 
-      const plan = extractPlanFromOutput(output);
-      if (!plan || plan.tasks.length === 0) {
+      const planDecode = decodePlanningOutput(output);
+      if (!planDecode.data || planDecode.data.tasks.length === 0) {
         console.warn(
-          `[${REACTOR_NAME}] Could not extract tasks from PM output for task ${task.id}`,
+          `[${REACTOR_NAME}] Invalid PM planning output for task ${task.id}: ${planDecode.error ?? "empty plan"}`,
         );
         yield* engine.dispatch({
           type: "task.update-status",
           schemaVersion: 1 as const,
           commandId: crypto.randomUUID() as CommandId,
           taskId: task.id,
-          status: "done",
+          status: "failed",
+          reason: `Invalid planning output: ${planDecode.error ?? "No tasks proposed."}`,
           createdAt: new Date().toISOString(),
         });
-        yield* completeMeetingForTask(task.input);
         return;
       }
+
+      const plan = planDecode.data;
 
       console.log(
         `[${REACTOR_NAME}] Extracted ${plan.tasks.length} tasks from PM planning output`,
       );
 
-      const taskIds = plan.tasks.map(() => crypto.randomUUID() as TaskId);
+      const invalidTaskIndex = plan.tasks.findIndex((planTask, i) =>
+        planTask.deps.some(
+          (depIdx) => depIdx < 0 || depIdx >= plan.tasks.length || depIdx === i,
+        ),
+      );
+      if (invalidTaskIndex !== -1) {
+        const invalidTask = plan.tasks[invalidTaskIndex]!;
+        yield* engine.dispatch({
+          type: "task.update-status",
+          schemaVersion: 1 as const,
+          commandId: crypto.randomUUID() as CommandId,
+          taskId: task.id,
+          status: "failed",
+          reason: `Invalid dependency indexes in planning output for task ${invalidTaskIndex + 1}: ${JSON.stringify(invalidTask.deps)}`,
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
 
-      const validTypes = [
-        "decomposition",
-        "implementation",
-        "review",
-        "testing",
-        "planning",
-      ] as const;
-
-      const proposedTasks = plan.tasks.map((planTask, i) => {
-        const resolvedDeps = (planTask.deps ?? [])
-          .filter(
-            (depIdx) => depIdx >= 0 && depIdx < taskIds.length && depIdx !== i,
-          )
-          .map((depIdx) => taskIds[depIdx]);
-
-        const taskType = validTypes.includes(
-          planTask.taskType as (typeof validTypes)[number],
+      const implAndTestingIndices = plan.tasks
+        .map((planTask, i) =>
+          planTask.taskType === "implementation" || planTask.taskType === "testing" ? i : -1,
         )
-          ? (planTask.taskType as (typeof validTypes)[number])
-          : "implementation";
+        .filter((i) => i !== -1);
+
+      const normalizedPlanTasks = plan.tasks.map((planTask, i) => {
+        if (planTask.taskType !== "review") return planTask;
+
+        const missingDeps = implAndTestingIndices.filter(
+          (depIdx) => !planTask.deps.includes(depIdx),
+        );
+
+        if (missingDeps.length === 0) {
+          return planTask;
+        }
+
+        console.warn(
+          `[${REACTOR_NAME}] Auto-corrected review task at index ${i}: added missing deps [${missingDeps.join(", ")}]`,
+        );
 
         return {
-          taskType,
-          title: planTask.title || `Task ${i + 1}`,
-          description: planTask.description || "",
-          deps: resolvedDeps,
+          ...planTask,
+          deps: [...new Set([...planTask.deps, ...missingDeps])],
+        };
+      });
+
+      const proposedTasks = normalizedPlanTasks.map((planTask) => {
+        return {
+          taskType: planTask.taskType,
+          title: planTask.title,
+          description: planTask.description,
+          deps: [...planTask.deps],
           input: { parentPlanningTaskId: task.id },
         };
       });

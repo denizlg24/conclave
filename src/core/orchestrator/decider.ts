@@ -5,7 +5,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@/shared/types/orchestration";
-import type { CommandId, EventId } from "@/shared/types/base-schemas";
+import type { CommandId, EventId, TaskId } from "@/shared/types/base-schemas";
 
 import { CommandInvariantError } from "./errors";
 import {
@@ -48,11 +48,24 @@ const VALID_STATUS_TRANSITIONS: Record<string, ReadonlyArray<string>> = {
   review: ["done", "failed", "in_progress"],
   blocked: ["pending", "assigned", "failed"],
   done: [],
-  failed: ["pending"],
+  failed: ["pending", "blocked"],
   proposed: ["pending", "blocked", "failed"],
   rejected: [],
-  suspended: ["in_progress", "pending", "failed"],
+  suspended: ["in_progress", "pending", "blocked", "failed"],
 };
+
+function hasIncompleteDependencies(
+  readModel: OrchestrationReadModel,
+  taskId: TaskId,
+): boolean {
+  const task = readModel.tasks.find((candidate) => candidate.id === taskId);
+  if (!task) return false;
+
+  return task.deps.some((depId) => {
+    const dep = readModel.tasks.find((candidate) => candidate.id === depId);
+    return !dep || dep.status !== "done";
+  });
+}
 
 export const decideOrchestrationCommand = Effect.fn(
   "decideOrchestrationCommand",
@@ -138,12 +151,17 @@ export const decideOrchestrationCommand = Effect.fn(
         taskId: command.taskId,
       });
 
+      const nextStatus =
+        command.status === "pending" && hasIncompleteDependencies(readModel, command.taskId)
+          ? "blocked"
+          : command.status;
+
       const allowed = VALID_STATUS_TRANSITIONS[task.status];
-      if (!allowed || !allowed.includes(command.status)) {
+      if (!allowed || !allowed.includes(nextStatus)) {
         return yield* Effect.fail(
           new CommandInvariantError({
             commandType: command.type,
-            detail: `Cannot transition task '${command.taskId}' from '${task.status}' to '${command.status}'.`,
+            detail: `Cannot transition task '${command.taskId}' from '${task.status}' to '${nextStatus}'.`,
           }),
         );
       }
@@ -159,7 +177,7 @@ export const decideOrchestrationCommand = Effect.fn(
         payload: {
           taskId: command.taskId,
           previousStatus: task.status,
-          status: command.status,
+          status: nextStatus,
           reason: command.reason ?? null,
           output: command.output,
           updatedAt: command.createdAt,
@@ -291,6 +309,10 @@ export const decideOrchestrationCommand = Effect.fn(
 
       // Transition approved tasks: proposed → pending
       for (const taskId of command.approvedTaskIds) {
+        const approvedStatus = hasIncompleteDependencies(readModel, taskId)
+          ? "blocked"
+          : "pending";
+
         events.push({
           ...withEventBase({
             aggregateKind: "task",
@@ -302,7 +324,7 @@ export const decideOrchestrationCommand = Effect.fn(
           payload: {
             taskId,
             previousStatus: "proposed",
-            status: "pending",
+            status: approvedStatus,
             reason: `Approved via meeting '${command.meetingId}'`,
             updatedAt: command.createdAt,
           },

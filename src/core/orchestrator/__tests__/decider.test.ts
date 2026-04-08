@@ -265,6 +265,27 @@ describe("decideOrchestrationCommand", () => {
       }
     });
 
+    test("coerces pending to blocked when dependencies are not done", async () => {
+      const depTask = makeTask({ id: makeTaskId("dep-task"), status: "pending" });
+      const task = makeTask({
+        id: makeTaskId("task-1"),
+        status: "proposed",
+        deps: [depTask.id],
+      });
+      const command = makeUpdateStatusCommand(task.id, "pending");
+      const readModel = makeReadModelWithTasks([depTask, task]);
+
+      const result = await Effect.runPromise(
+        decideOrchestrationCommand({ command, readModel }),
+      );
+
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.type).toBe("task.status-updated");
+      if (event.type === "task.status-updated") {
+        expect(event.payload.status).toBe("blocked");
+      }
+    });
+
     describe("status transition rules", () => {
       const validTransitions: Array<[TaskStatus, TaskStatus[]]> = [
         ["pending", ["assigned", "blocked", "failed"]],

@@ -121,6 +121,36 @@ describe("decider — proposed task approval flow", () => {
       }
     });
 
+    test("approved proposed task transitions from proposed to blocked when dependencies are unresolved", async () => {
+      const meeting = makeMeeting({ id: makeMeetingId("blocked-approval-mtg") });
+      const dependency = makeTask({
+        id: makeTaskId("impl-task"),
+        status: "pending",
+      });
+      const approvedTask = makeTask({
+        id: makeTaskId("review-task"),
+        status: "proposed",
+        deps: [dependency.id],
+      });
+      const command = makeApproveTasksCommand(meeting.id, [approvedTask.id], []);
+      const readModel = makeReadModelWithTasks([dependency, approvedTask], [meeting]);
+
+      const result = await Effect.runPromise(
+        decideOrchestrationCommand({ command, readModel }),
+      );
+
+      const events = toArray(result);
+      const statusEvent = events.find(
+        (e) => e.type === "task.status-updated" && e.aggregateId === approvedTask.id,
+      );
+
+      expect(statusEvent).toBeDefined();
+      if (statusEvent?.type === "task.status-updated") {
+        const payload = statusEvent.payload as { status: string };
+        expect(payload.status).toBe("blocked");
+      }
+    });
+
     test("rejected proposed task transitions from proposed to failed", async () => {
       const meeting = makeMeeting({ id: makeMeetingId("rejection-mtg") });
       const rejectedTask = makeTask({

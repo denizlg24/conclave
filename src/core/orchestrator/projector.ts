@@ -95,9 +95,18 @@ export function projectEvent(
 
     case "task.status-updated": {
       const { payload } = event;
+      const task = base.tasks.find((candidate) => candidate.id === payload.taskId);
+      const nextStatus =
+        payload.status === "pending" &&
+        task?.deps.some((depId) => {
+          const dep = base.tasks.find((candidate) => candidate.id === depId);
+          return !dep || dep.status !== "done";
+        })
+          ? "blocked"
+          : payload.status;
 
       let tasks = updateTask(base.tasks, payload.taskId, {
-        status: payload.status,
+        status: nextStatus,
         updatedAt: payload.updatedAt,
         ...(payload.output !== undefined ? { output: payload.output } : {}),
       });
