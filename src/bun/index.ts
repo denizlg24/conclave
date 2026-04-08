@@ -1,5 +1,5 @@
 // Ensure HOME is set before anything runs — Windows uses USERPROFILE,
-// but Claude CLI needs HOME to find ~/.claude/ credentials
+// but external agent CLIs expect HOME for credentials and local config.
 if (!process.env.HOME && process.env.USERPROFILE) {
   process.env.HOME = process.env.USERPROFILE;
 }
@@ -11,6 +11,12 @@ import {
   createProjectManager,
   type ProjectMeta,
 } from "../core/project/project-manager";
+import {
+  ADAPTER_OPTIONS,
+  DEFAULT_ADAPTER_TYPE,
+  isAdapterType,
+  type AdapterType,
+} from "../shared/types/adapter";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -34,6 +40,7 @@ async function getMainViewUrl(): Promise<string> {
 const projectManager = createProjectManager();
 let conclave: ConclaveShape | null = null;
 let activeProject: ProjectMeta | null = null;
+let selectedAdapter: AdapterType = DEFAULT_ADAPTER_TYPE;
 // Lazy reference — set after BrowserWindow is created so push callbacks
 // always target the current webview, even after page refreshes.
 let getWebviewRpc: (() => ReturnType<typeof BrowserView.defineRPC<ConclaveRPCSchema>> | null) | null = null;
@@ -101,7 +108,7 @@ async function loadProjectAndBootstrap(
   activeProject = project;
 
   console.log(`Loading project: ${project.name} (${project.path})`);
-  conclave = await bootstrapConclave(project.path);
+  conclave = await bootstrapConclave(project.path, selectedAdapter);
   console.log("Conclave orchestration system initialized.");
 
   conclave.onEvent((event, model) => {
@@ -164,6 +171,22 @@ const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
       getActiveProject: () => {
         return Promise.resolve(activeProject);
       },
+      getAdapterState: () => {
+        return Promise.resolve({
+          selectedAdapter,
+          availableAdapters: [...ADAPTER_OPTIONS],
+        });
+      },
+      setAdapter: ({ adapterType }) => {
+        if (!isAdapterType(adapterType)) {
+          throw new Error(`Unsupported adapter '${adapterType}'`);
+        }
+        selectedAdapter = adapterType;
+        return Promise.resolve({
+          selectedAdapter,
+          availableAdapters: [...ADAPTER_OPTIONS],
+        });
+      },
       getAgentRoster: () => {
         if (!conclave) throw new Error("No project loaded");
         return conclave.getAgentRoster();
@@ -210,6 +233,18 @@ const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
       retryTask: ({ taskId }) => {
         if (!conclave) throw new Error("No project loaded");
         return conclave.retryTask(taskId);
+      },
+      deleteProject: ({ projectId }) => {
+        projectManager.deleteProject(projectId);
+        return Promise.resolve({ success: true });
+      },
+      unloadProject: async () => {
+        if (conclave) {
+          await conclave.shutdown();
+          conclave = null;
+        }
+        activeProject = null;
+        return { success: true };
       },
     },
     messages: {},

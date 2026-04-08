@@ -1,3 +1,5 @@
+import type { AdapterOption, AdapterType } from "../types/adapter";
+
 export type SerializedProject = {
   id: string;
   name: string;
@@ -94,6 +96,13 @@ export type SerializedSuspendedTask = {
   taskTitle: string;
 };
 
+export type SerializedAdapterOption = AdapterOption;
+
+export type SerializedAdapterState = {
+  selectedAdapter: AdapterType;
+  availableAdapters: SerializedAdapterOption[];
+};
+
 export type ConclaveRPCSchema = {
   bun: {
     requests: {
@@ -120,6 +129,14 @@ export type ConclaveRPCSchema = {
       getActiveProject: {
         params: Record<string, never>;
         response: SerializedProject | null;
+      };
+      getAdapterState: {
+        params: Record<string, never>;
+        response: SerializedAdapterState;
+      };
+      setAdapter: {
+        params: { adapterType: AdapterType };
+        response: SerializedAdapterState;
       };
 
       getAgentRoster: {
@@ -183,6 +200,14 @@ export type ConclaveRPCSchema = {
       };
       retryTask: {
         params: { taskId: string };
+        response: { success: boolean };
+      };
+      deleteProject: {
+        params: { projectId: string };
+        response: { success: boolean };
+      };
+      unloadProject: {
+        params: Record<string, never>;
         response: { success: boolean };
       };
     };

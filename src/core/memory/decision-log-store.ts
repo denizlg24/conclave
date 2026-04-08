@@ -8,6 +8,7 @@ import type { AgentId, TaskId, MeetingId } from "@/shared/types/base-schemas";
 export type DecisionType =
   | "task_decomposition"
   | "task_assignment"
+  | "task_execution"
   | "code_review"
   | "test_result"
   | "meeting_summary";

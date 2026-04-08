@@ -117,11 +117,19 @@ describe("PersistentEventStore", () => {
 
       await runEffectAsync(store.append(eventData));
 
-      const filePath = join(storagePath, "events.json");
+      const filePath = join(storagePath, "events.ndjson");
       expect(existsSync(filePath)).toBe(true);
 
       const fileContent = readFileSync(filePath, "utf-8");
-      const persistedEvents = JSON.parse(fileContent);
+      const persistedEvents = fileContent
+        .trim()
+        .split(/\r?\n/)
+        .flatMap(
+          (line) => JSON.parse(line) as Array<{
+            sequence: number;
+            payload: { taskId: string };
+          }>,
+        );
 
       expect(persistedEvents).toHaveLength(1);
       expect(persistedEvents[0].sequence).toBe(1);

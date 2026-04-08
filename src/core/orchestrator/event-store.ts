@@ -9,6 +9,10 @@ export interface EventStoreShape {
     event: Omit<OrchestrationEvent, "sequence">,
   ) => Effect.Effect<OrchestrationEvent, EventStoreError>;
 
+  readonly appendBatch: (
+    events: ReadonlyArray<Omit<OrchestrationEvent, "sequence">>,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationEvent>, EventStoreError>;
+
   readonly readFrom: (
     fromSequenceExclusive: number,
   ) => Stream.Stream<OrchestrationEvent, EventStoreError>;
@@ -26,17 +30,31 @@ export function createInMemoryEventStore(): Effect.Effect<EventStoreShape> {
     const eventsRef = yield* Ref.make<OrchestrationEvent[]>([]);
     const sequenceRef = yield* Ref.make(0);
 
-    const append: EventStoreShape["append"] = (eventWithoutSeq) =>
+    const appendBatch: EventStoreShape["appendBatch"] = (eventsWithoutSeq) =>
       Effect.gen(function* () {
-        const nextSeq = yield* Ref.updateAndGet(sequenceRef, (s) => s + 1);
-        const event = {
-          ...eventWithoutSeq,
-          sequence: nextSeq,
-        } as OrchestrationEvent;
+        if (eventsWithoutSeq.length === 0) {
+          return [];
+        }
 
-        yield* Ref.update(eventsRef, (events) => [...events, event]);
-        return event;
+        const currentSequence = yield* Ref.get(sequenceRef);
+        const persistedEvents = eventsWithoutSeq.map((eventWithoutSeq, index) => ({
+          ...eventWithoutSeq,
+          sequence: currentSequence + index + 1,
+        })) as ReadonlyArray<OrchestrationEvent>;
+
+        yield* Ref.update(eventsRef, (events) => [...events, ...persistedEvents]);
+        yield* Ref.set(
+          sequenceRef,
+          persistedEvents[persistedEvents.length - 1]?.sequence ?? currentSequence,
+        );
+
+        return persistedEvents;
       });
+
+    const append: EventStoreShape["append"] = (eventWithoutSeq) =>
+      appendBatch([eventWithoutSeq]).pipe(
+        Effect.map((events) => events[0]!),
+      );
 
     const readFrom: EventStoreShape["readFrom"] = (fromSequenceExclusive) =>
       Stream.fromEffect(Ref.get(eventsRef)).pipe(
@@ -52,6 +70,12 @@ export function createInMemoryEventStore(): Effect.Effect<EventStoreShape> {
     const latestSequence: EventStoreShape["latestSequence"] = () =>
       Ref.get(sequenceRef);
 
-    return { append, readFrom, readAll, latestSequence } satisfies EventStoreShape;
+    return {
+      append,
+      appendBatch,
+      readFrom,
+      readAll,
+      latestSequence,
+    } satisfies EventStoreShape;
   });
 }

@@ -14,7 +14,7 @@ export interface SuspensionContext {
   readonly taskId: TaskId;
   readonly agentId: AgentId;
   readonly agentRole: AgentRole;
-  readonly claudeSessionId: string;
+  readonly sessionId: string;
   readonly suspendedAt: string;
   readonly reason: SuspensionReason;
   readonly executionContext: {
@@ -64,7 +64,7 @@ function isValidSuspensionContext(value: unknown): value is SuspensionContext {
     typeof v.id !== "string" ||
     typeof v.taskId !== "string" ||
     typeof v.agentId !== "string" ||
-    typeof v.claudeSessionId !== "string" ||
+    typeof v.sessionId !== "string" ||
     typeof v.suspendedAt !== "string"
   ) {
     return false;

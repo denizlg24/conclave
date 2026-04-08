@@ -75,17 +75,12 @@ export function createOrchestrationEngine(
         );
 
         const eventsWithoutSeq = Array.isArray(result) ? result : [result];
-        const persistedEvents: OrchestrationEvent[] = [];
-
-        for (const evt of eventsWithoutSeq) {
-          const persisted = yield* store.append(evt).pipe(
-            Effect.mapError(
-              (cause) =>
-                new DispatchError({ commandType: command.type, cause }),
-            ),
-          );
-          persistedEvents.push(persisted);
-        }
+        const persistedEvents = yield* store.appendBatch(eventsWithoutSeq).pipe(
+          Effect.mapError(
+            (cause) =>
+              new DispatchError({ commandType: command.type, cause }),
+          ),
+        );
 
         // Project all new events onto the read model
         yield* Ref.update(readModelRef, (model) =>

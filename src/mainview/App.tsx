@@ -188,7 +188,9 @@ function GameScene() {
       }
     }
 
-    if (agentRoster.length === 0 && map.size === 0) {
+    // Full reset when all agents are gone (project reload or empty roster)
+    if (map.size === 0) {
+      occupiedDesks.clear();
       roleCounterRef.current = new Map();
     }
 

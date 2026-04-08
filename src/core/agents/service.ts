@@ -1,5 +1,6 @@
 import { Effect, Stream } from "effect";
 
+import type { AdapterType } from "@/shared/types/adapter";
 import type { AgentId, TaskId } from "@/shared/types/base-schemas";
 import type {
   AgentRoleConfig,
@@ -11,9 +12,18 @@ import type { AgentAdapterShape, AgentSession } from "./adapter";
 import { AgentAdapterError } from "./errors";
 import type { AgentError } from "./errors";
 
+const defaultModelForAdapter = (adapterType: AdapterType): string => {
+  switch (adapterType) {
+    case "claude-code":
+      return "claude-sonnet-4-6";
+    case "openai-codex":
+      return "gpt-5-codex";
+  }
+};
+
 const DEFAULT_ROLE_CONFIGS: Record<
   string,
-  Omit<AgentRoleConfig, "workingDirectory">
+  Omit<AgentRoleConfig, "workingDirectory" | "model">
 > = {
   pm: {
     role: "pm",
@@ -68,9 +78,7 @@ const DEFAULT_ROLE_CONFIGS: Record<
       "- NEVER forget to include a review task - it ensures quality control.",
     ].join("\n"),
     allowedTools: ["Read", "Write", "Glob", "Grep", "WebSearch", "WebFetch"],
-    maxTokens: 16384,
     maxTurns: 10,
-    model: "claude-sonnet-4-6",
   },
   developer: {
     role: "developer",
@@ -81,9 +89,7 @@ const DEFAULT_ROLE_CONFIGS: Record<
       "You work within the scope of your assigned task and report results as structured output.",
     ].join("\n"),
     allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "LSP"],
-    maxTokens: 32768,
     maxTurns: 25,
-    model: "claude-sonnet-4-6",
   },
   reviewer: {
     role: "reviewer",
@@ -94,9 +100,7 @@ const DEFAULT_ROLE_CONFIGS: Record<
       "Produce structured review feedback with approve/reject decisions and specific comments.",
     ].join("\n"),
     allowedTools: ["Read", "Glob", "Grep", "Bash"],
-    maxTokens: 16384,
     maxTurns: 15,
-    model: "claude-sonnet-4-6",
   },
   tester: {
     role: "tester",
@@ -108,9 +112,7 @@ const DEFAULT_ROLE_CONFIGS: Record<
       "Produce structured test reports with pass/fail status and details on failures.",
     ].join("\n"),
     allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
-    maxTokens: 24576,
     maxTurns: 20,
-    model: "claude-sonnet-4-6",
   },
 };
 
@@ -213,6 +215,7 @@ export function createAgentService(
 
       const config: AgentRoleConfig = {
         ...defaults,
+        model: defaultModelForAdapter(adapter.adapterType),
         workingDirectory,
         ...configOverrides,
         role,
@@ -234,7 +237,9 @@ export function createAgentService(
     adapter.interrupt(agentId);
 
   const stopAgent: AgentServiceShape["stopAgent"] = (agentId) =>
-    adapter.stopSession(agentId);
+    adapter.stopSession(agentId).pipe(
+      Effect.tap(() => Effect.sync(notifyRosterChange)),
+    );
 
   const stopAll: AgentServiceShape["stopAll"] = () =>
     Effect.gen(function* () {
@@ -269,7 +274,27 @@ export function createAgentService(
       const roleAgents = agents.filter((a) => a.role === role);
 
       const idle = roleAgents.find((a) => !busyAgents.has(a.agentId));
-      if (idle) return idle;
+      if (idle) {
+        const hasPriorTaskContext =
+          idle.sessionId.length > 0 ||
+          idle.turnCount > 0 ||
+          idle.cumulativeUsage.inputTokens > 0 ||
+          idle.cumulativeUsage.outputTokens > 0 ||
+          idle.cumulativeUsage.cacheCreationInputTokens > 0 ||
+          idle.cumulativeUsage.cacheReadInputTokens > 0;
+
+        if (!hasPriorTaskContext) {
+          return idle;
+        }
+
+        yield* stopAgent(idle.agentId);
+        return yield* startAgent(
+          idle.agentId,
+          role,
+          idle.config.workingDirectory,
+          idle.config,
+        );
+      }
 
       const max = poolConfig.maxPerRole[role] ?? 0;
       if (roleAgents.length >= max) {

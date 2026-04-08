@@ -453,7 +453,6 @@ export function makeAgentRoleConfig(
     role: "developer" as AgentRole,
     systemPrompt: "You are a developer agent.",
     allowedTools: ["Read", "Write", "Edit"],
-    maxTokens: 16384,
     maxTurns: 10,
     model: "claude-sonnet-4-6" as string & { readonly TrimmedNonEmptyString: unique symbol },
     workingDirectory: "/tmp/test",
@@ -466,8 +465,9 @@ export function makeAgentSession(
 ): AgentSession {
   return {
     agentId: makeAgentId(),
+    adapterType: "claude-code",
     role: "developer" as AgentRole,
-    claudeSessionId: `session-${Date.now()}`,
+    sessionId: `session-${Date.now()}`,
     model: "claude-sonnet-4-6",
     config: makeAgentRoleConfig(),
     cumulativeUsage: makeTokenUsage(),

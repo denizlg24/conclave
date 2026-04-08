@@ -1,4 +1,10 @@
 export {
+  createAgentRuntimeEventStore,
+  type AgentRuntimeEventStoreOptions,
+  type AgentRuntimeEventStoreShape,
+} from "./agent-runtime-event-store";
+
+export {
   createPersistentEventStore,
   type PersistentEventStoreOptions,
 } from "./persistent-event-store";

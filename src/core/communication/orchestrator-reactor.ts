@@ -1,6 +1,7 @@
 import { Effect, Fiber, Stream, type Scope } from "effect";
 
 import type { OrchestrationEvent, TaskType, AgentRole } from "@/shared/types/orchestration";
+import type { AgentRuntimeEvent } from "@/shared/types/agent-runtime";
 import type { BusEvent } from "@/shared/types/bus-event";
 import type { CommandId, TaskId } from "@/shared/types/base-schemas";
 
@@ -21,6 +22,12 @@ const TASK_ROLE_MAP: Record<TaskType, AgentRole> = {
 
 function isOrchestrationEvent(event: BusEvent): event is OrchestrationEvent {
   return event.type.startsWith("task.") || event.type.startsWith("meeting.");
+}
+
+function isAgentBecameAvailable(
+  event: BusEvent,
+): event is AgentRuntimeEvent & { type: "agent.became-available" } {
+  return event.type === "agent.became-available";
 }
 
 export function createOrchestratorReactor(deps: {
@@ -89,20 +96,6 @@ export function createOrchestratorReactor(deps: {
               yield* tryAutoAssign(task.id, task.taskType);
             }
 
-            // An agent just freed up — retry any unassigned pending tasks
-            // that previously couldn't be assigned due to capacity
-            const unassignedPending = readModel.tasks.filter(
-              (t) =>
-                t.status === "pending" &&
-                t.owner === null &&
-                !t.deps.some((depId) => {
-                  const dep = readModel.tasks.find((d) => d.id === depId);
-                  return dep && dep.status !== "done";
-                }),
-            );
-            for (const task of unassignedPending) {
-              yield* tryAutoAssign(task.id, task.taskType);
-            }
           }
 
           if (event.payload.status === "pending") {
@@ -122,18 +115,55 @@ export function createOrchestratorReactor(deps: {
       }
     });
 
-  return bus
-    .subscribeFiltered(isOrchestrationEvent)
-    .pipe(
+  const handleAgentBecameAvailable = (
+    _event: AgentRuntimeEvent & { type: "agent.became-available" },
+  ) =>
+    Effect.gen(function* () {
+      const readModel = yield* engine.getReadModel();
+
+      // An agent just freed up — retry any unassigned pending tasks
+      // that previously couldn't be assigned due to capacity
+      const unassignedPending = readModel.tasks.filter(
+        (t) =>
+          t.status === "pending" &&
+          t.owner === null &&
+          !t.deps.some((depId) => {
+            const dep = readModel.tasks.find((d) => d.id === depId);
+            return dep && dep.status !== "done";
+          }),
+      );
+      for (const task of unassignedPending) {
+        yield* tryAutoAssign(task.id, task.taskType);
+      }
+    });
+
+  return Effect.gen(function* () {
+    yield* bus.subscribeFiltered(isAgentBecameAvailable).pipe(
       Stream.runForEach((event) =>
-        handleEvent(event).pipe(
+        handleAgentBecameAvailable(event).pipe(
           Effect.catch((error: unknown) =>
             Effect.logWarning(
-              `[${REACTOR_NAME}] Failed to handle ${event.type}: ${String(error)}`,
+              `[${REACTOR_NAME}] Failed to handle agent.became-available: ${String(error)}`,
             ),
           ),
         ),
       ),
       Effect.forkScoped,
     );
+
+    return yield* bus
+      .subscribeFiltered(isOrchestrationEvent)
+      .pipe(
+        Stream.runForEach((event) =>
+          handleEvent(event).pipe(
+            Effect.catch((error: unknown) =>
+              Effect.logWarning(
+                `[${REACTOR_NAME}] Failed to handle ${event.type}: ${String(error)}`,
+              ),
+            ),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+  });
 }

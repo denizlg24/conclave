@@ -35,24 +35,35 @@ export function createMeetingReactor(deps: {
 
       const { payload } = event;
 
-      // Pre-generate all TaskIds so index-based dep references can be resolved
       const proposedTaskIds = payload.proposedTasks.map(
         () => crypto.randomUUID() as TaskId,
       );
 
-      for (let i = 0; i < payload.proposedTasks.length; i++) {
-        const proposed = payload.proposedTasks[i]!;
-        const taskId = proposedTaskIds[i]!;
-
-        // proposedTasks.deps uses zero-based index references into proposedTasks;
-        // map each to the pre-generated TaskId at that index.
+      const resolvedTaskDeps = payload.proposedTasks.map((proposed, index) => {
         const resolvedDeps = proposed.deps.map((dep) => {
-          const idx = parseInt(dep, 10);
-          if (!isNaN(idx) && idx >= 0 && idx < proposedTaskIds.length) {
-            return proposedTaskIds[idx]!;
+          if (typeof dep === "number") {
+            if (dep < 0 || dep >= proposedTaskIds.length) {
+              throw new Error(
+                `Meeting '${payload.meetingId}' proposed task ${index + 1} references out-of-range dependency index ${dep}.`,
+              );
+            }
+            if (dep === index) {
+              throw new Error(
+                `Meeting '${payload.meetingId}' proposed task ${index + 1} cannot depend on itself.`,
+              );
+            }
+            return proposedTaskIds[dep]!;
           }
           return dep as TaskId;
         });
+        return {
+          proposed,
+          taskId: proposedTaskIds[index]!,
+          resolvedDeps,
+        };
+      });
+
+      for (const { proposed, taskId, resolvedDeps } of resolvedTaskDeps) {
 
         yield* engine.dispatch({
           type: "task.create",

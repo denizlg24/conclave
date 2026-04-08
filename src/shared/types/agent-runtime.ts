@@ -17,7 +17,6 @@ export const AgentRoleConfig = Schema.Struct({
   role: AgentRole,
   systemPrompt: Schema.String,
   allowedTools: Schema.Array(Schema.String),
-  maxTokens: NonNegativeInt,
   maxTurns: NonNegativeInt,
   model: TrimmedNonEmptyString,
   workingDirectory: Schema.String,
@@ -112,6 +111,7 @@ export type ClaudeCodeRawEvent = typeof ClaudeCodeRawEvent.Type;
 
 export const AgentSessionStarted = Schema.Struct({
   type: Schema.Literal("agent.session.started"),
+  schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   role: AgentRole,
   sessionId: Schema.String,
@@ -121,6 +121,7 @@ export const AgentSessionStarted = Schema.Struct({
 
 export const AgentTurnStarted = Schema.Struct({
   type: Schema.Literal("agent.turn.started"),
+  schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   sessionId: Schema.String,
   taskId: Schema.NullOr(TaskId),
@@ -130,6 +131,7 @@ export const AgentTurnStarted = Schema.Struct({
 
 export const AgentToolInvoked = Schema.Struct({
   type: Schema.Literal("agent.tool.invoked"),
+  schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   sessionId: Schema.String,
   toolName: Schema.String,
@@ -140,6 +142,7 @@ export const AgentToolInvoked = Schema.Struct({
 
 export const AgentOutputProduced = Schema.Struct({
   type: Schema.Literal("agent.output.produced"),
+  schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   sessionId: Schema.String,
   content: Schema.String,
@@ -148,6 +151,7 @@ export const AgentOutputProduced = Schema.Struct({
 
 export const AgentTurnCompleted = Schema.Struct({
   type: Schema.Literal("agent.turn.completed"),
+  schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   sessionId: Schema.String,
   usage: TokenUsage,
@@ -158,6 +162,7 @@ export const AgentTurnCompleted = Schema.Struct({
 
 export const AgentSessionEnded = Schema.Struct({
   type: Schema.Literal("agent.session.ended"),
+  schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   sessionId: Schema.String,
   totalUsage: TokenUsage,
@@ -168,6 +173,7 @@ export const AgentSessionEnded = Schema.Struct({
 
 export const AgentError = Schema.Struct({
   type: Schema.Literal("agent.error"),
+  schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   sessionId: Schema.String,
   error: Schema.String,
@@ -176,11 +182,20 @@ export const AgentError = Schema.Struct({
 
 export const AgentQuotaExhausted = Schema.Struct({
   type: Schema.Literal("agent.quota.exhausted"),
+  schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   sessionId: Schema.String,
   taskId: Schema.NullOr(TaskId),
   adapterType: Schema.String,
   rawMessage: Schema.String,
+  occurredAt: IsoDateTime,
+});
+
+export const AgentBecameAvailable = Schema.Struct({
+  type: Schema.Literal("agent.became-available"),
+  schemaVersion: Schema.Literal(1),
+  agentId: AgentId,
+  agentRole: AgentRole,
   occurredAt: IsoDateTime,
 });
 
@@ -193,5 +208,6 @@ export const AgentRuntimeEvent = Schema.Union([
   AgentSessionEnded,
   AgentError,
   AgentQuotaExhausted,
+  AgentBecameAvailable,
 ]);
 export type AgentRuntimeEvent = typeof AgentRuntimeEvent.Type;

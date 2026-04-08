@@ -162,21 +162,28 @@ const MeetingContributeCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const MeetingTaskDependencyRef = Schema.Union([
+  TaskId,
+  NonNegativeInt,
+]);
+export type MeetingTaskDependencyRef = typeof MeetingTaskDependencyRef.Type;
+
+export const MeetingProposedTask = Schema.Struct({
+  taskType: TaskType,
+  title: TrimmedNonEmptyString,
+  description: Schema.String,
+  deps: Schema.Array(MeetingTaskDependencyRef),
+  input: Schema.Unknown,
+});
+export type MeetingProposedTask = typeof MeetingProposedTask.Type;
+
 const MeetingCompleteCommand = Schema.Struct({
   type: Schema.Literal("meeting.complete"),
   schemaVersion: Schema.Literal(1),
   commandId: CommandId,
   meetingId: MeetingId,
   summary: Schema.String,
-  proposedTasks: Schema.Array(
-    Schema.Struct({
-      taskType: TaskType,
-      title: TrimmedNonEmptyString,
-      description: Schema.String,
-      deps: Schema.Array(TaskId),
-      input: Schema.Unknown,
-    }),
-  ),
+  proposedTasks: Schema.Array(MeetingProposedTask),
   createdAt: IsoDateTime,
 });
 
@@ -303,15 +310,7 @@ export const MeetingCompletedPayload = Schema.Struct({
   meetingId: MeetingId,
   summary: Schema.String,
   proposedTaskIds: Schema.Array(TaskId),
-  proposedTasks: Schema.Array(
-    Schema.Struct({
-      taskType: TaskType,
-      title: TrimmedNonEmptyString,
-      description: Schema.String,
-      deps: Schema.Array(TaskId),
-      input: Schema.Unknown,
-    }),
-  ),
+  proposedTasks: Schema.Array(MeetingProposedTask),
   completedAt: IsoDateTime,
 });
 

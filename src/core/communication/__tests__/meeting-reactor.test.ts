@@ -6,11 +6,11 @@ import { createEventBus } from "../event-bus";
 import { createReceiptStore } from "../receipt-store";
 import type { OrchestrationEngineShape } from "../../orchestrator/engine";
 import type {
+  MeetingTaskDependencyRef,
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@/shared/types/orchestration";
-import type { TaskId } from "@/shared/types/base-schemas";
 import {
   resetCounters,
   makeTaskId,
@@ -31,7 +31,7 @@ function makeMeetingCompletedEvent(
     taskType: "decomposition" | "implementation" | "review" | "testing" | "planning";
     title: TrimStr;
     description: string;
-    deps: TaskId[];
+    deps: MeetingTaskDependencyRef[];
     input: unknown;
   }>,
   sequence = 1,
@@ -159,10 +159,10 @@ describe("meeting-reactor", () => {
       const meetingId = makeMeetingId("mtg-deps");
       const { engine, dispatchedCommands } = makeMockEngine();
 
-      // task[1] depends on task[0] expressed as the index "0"
+      // task[1] depends on task[0] expressed as the zero-based index 0
       const event = makeMeetingCompletedEvent(meetingId, [
         { taskType: "implementation", title: str("Base Task"), description: "Do base work", deps: [], input: null },
-        { taskType: "review", title: str("Dependent Task"), description: "Depends on base", deps: ["0" as TaskId], input: null },
+        { taskType: "review", title: str("Dependent Task"), description: "Depends on base", deps: [0], input: null },
       ]);
 
       await runWithReactor(engine, event);

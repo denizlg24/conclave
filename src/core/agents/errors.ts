@@ -1,5 +1,7 @@
 import { Data } from "effect";
 
+import type { AdapterType } from "@/shared/types/adapter";
+
 export class AgentAdapterError extends Data.TaggedError(
   "AgentAdapterError",
 )<{
@@ -40,7 +42,7 @@ export class AgentQuotaExhaustedError extends Data.TaggedError(
 )<{
   readonly agentId: string;
   readonly sessionId: string;
-  readonly adapterType: string;
+  readonly adapterType: AdapterType;
   readonly rawMessage: string;
   readonly detectedAt: string;
 }> {

@@ -1,20 +1,33 @@
 import { useState } from "react";
 import { useConclave } from "../hooks/use-conclave";
+import {
+  ADAPTER_OPTIONS,
+  type AdapterType,
+} from "../../shared/types/adapter";
 
 export function ProjectScreen() {
   const {
     projects,
+    selectedAdapter,
+    availableAdapters,
     createProject,
     openDirectory,
     browseForDirectory,
     loadProject,
+    setSelectedAdapter,
+    deleteProject,
   } = useConclave();
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  const [adapterLoading, setAdapterLoading] = useState<AdapterType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const adapterOptions =
+    availableAdapters.length > 0 ? availableAdapters : ADAPTER_OPTIONS;
 
   const handleBrowse = async () => {
     setError(null);
@@ -69,6 +82,20 @@ export function ProjectScreen() {
     }
   };
 
+  const handleAdapterSelect = async (adapterType: AdapterType) => {
+    if (adapterType === selectedAdapter || loading !== null) return;
+
+    setError(null);
+    setAdapterLoading(adapterType);
+    try {
+      await setSelectedAdapter(adapterType);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setAdapterLoading(null);
+    }
+  };
+
   return (
     <main
       className="w-full flex items-center justify-center"
@@ -119,6 +146,72 @@ export function ProjectScreen() {
 
         {/* Main menu */}
         <div className="w-full rpg-panel overflow-hidden">
+          <div
+            className="px-5 py-4"
+            style={{ borderBottom: "1px solid var(--rpg-border)" }}
+          >
+            <span
+              className="rpg-font text-[9px] tracking-wider block mb-3"
+              style={{ color: "var(--rpg-gold-dim)" }}
+            >
+              AGENT ADAPTER
+            </span>
+            <div className="grid grid-cols-2 gap-2">
+              {adapterOptions.map((adapter) => {
+                const active = adapter.type === selectedAdapter;
+                const isBusy = adapterLoading === adapter.type;
+
+                return (
+                  <button
+                    key={adapter.type}
+                    onClick={() => handleAdapterSelect(adapter.type)}
+                    disabled={loading !== null || adapterLoading !== null}
+                    className="text-left px-3 py-3 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{
+                      background: active
+                        ? "rgba(200, 169, 110, 0.08)"
+                        : "rgba(255, 255, 255, 0.02)",
+                      border: active
+                        ? "1px solid var(--rpg-border-highlight)"
+                        : "1px solid var(--rpg-border)",
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className="rpg-mono text-[11px]"
+                        style={{
+                          color: active
+                            ? "var(--rpg-gold)"
+                            : "var(--rpg-text)",
+                        }}
+                      >
+                        {adapter.label}
+                      </span>
+                      <span
+                        className="rpg-mono text-[8px] uppercase tracking-wider"
+                        style={{ color: "var(--rpg-text-muted)" }}
+                      >
+                        {isBusy ? "..." : adapter.provider}
+                      </span>
+                    </div>
+                    <p
+                      className="rpg-mono text-[9px] mt-2 leading-relaxed"
+                      style={{ color: "var(--rpg-text-muted)" }}
+                    >
+                      {adapter.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+            <p
+              className="rpg-mono text-[9px] mt-3"
+              style={{ color: "var(--rpg-text-muted)" }}
+            >
+              The selected adapter is used when you start or load the next campaign.
+            </p>
+          </div>
+
           {/* Menu actions */}
           <div
             className="flex flex-col"
@@ -236,53 +329,120 @@ export function ProjectScreen() {
                 Begin a new campaign to get started
               </p>
             ) : (
-              <div className="space-y-1 max-h-[240px] overflow-y-auto">
+              <div className="space-y-1 max-h-[240px] overflow-y-auto overflow-x-hidden">
                 {projects.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => handleLoad(p.id)}
-                    disabled={loading !== null}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 text-left cursor-pointer disabled:opacity-30 transition-all"
-                    style={{
-                      background: "transparent",
-                      border: "1px solid var(--rpg-border)",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "rgba(200, 169, 110, 0.05)";
-                      e.currentTarget.style.borderColor = "var(--rpg-border-highlight)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "transparent";
-                      e.currentTarget.style.borderColor = "var(--rpg-border)";
-                    }}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div
-                        className="rpg-mono text-[11px] truncate"
-                        style={{ color: "var(--rpg-text)" }}
-                      >
-                        {p.name}
-                      </div>
-                      <div
-                        className="rpg-mono text-[9px] truncate mt-0.5"
-                        style={{ color: "var(--rpg-text-muted)" }}
-                      >
-                        {p.path}
-                      </div>
-                    </div>
+                  <div key={p.id}>
                     <div
-                      className="rpg-mono text-[9px] shrink-0"
-                      style={{ color: "var(--rpg-text-muted)" }}
+                      className="flex items-center min-w-0"
+                      style={{ border: "1px solid var(--rpg-border)" }}
                     >
-                      {new Date(p.createdAt).toLocaleDateString()}
+                      <button
+                        onClick={() => handleLoad(p.id)}
+                        disabled={loading !== null || deletingId === p.id}
+                        className="flex-1 flex items-center gap-3 px-3 py-2.5 text-left cursor-pointer disabled:opacity-30 transition-all"
+                        style={{ background: "transparent" }}
+                        onMouseEnter={(e) => {
+                          if (deletingId !== p.id) {
+                            e.currentTarget.style.background = "rgba(200, 169, 110, 0.05)";
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div
+                            className="rpg-mono text-[11px] truncate"
+                            style={{ color: "var(--rpg-text)" }}
+                          >
+                            {p.name}
+                          </div>
+                          <div
+                            className="rpg-mono text-[9px] truncate mt-0.5"
+                            style={{ color: "var(--rpg-text-muted)" }}
+                          >
+                            {p.path}
+                          </div>
+                        </div>
+                        <div
+                          className="rpg-mono text-[9px] shrink-0"
+                          style={{ color: "var(--rpg-text-muted)" }}
+                        >
+                          {new Date(p.createdAt).toLocaleDateString()}
+                        </div>
+                        {loading === p.id && (
+                          <div
+                            className="w-3 h-3 border border-t-transparent rounded-full animate-spin shrink-0"
+                            style={{ borderColor: "var(--rpg-gold-dim)", borderTopColor: "transparent" }}
+                          />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setDeletingId(p.id)}
+                        disabled={loading !== null || deletingId !== null}
+                        className="rpg-mono text-[10px] px-2 py-1 mx-2 shrink-0 cursor-pointer transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                        style={{
+                          background: "rgba(196, 92, 74, 0.1)",
+                          border: "1px solid rgba(196, 92, 74, 0.3)",
+                          color: "var(--rpg-text-muted)",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "rgba(196, 92, 74, 0.2)";
+                          e.currentTarget.style.borderColor = "rgba(196, 92, 74, 0.6)";
+                          e.currentTarget.style.color = "#c45c4a";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "rgba(196, 92, 74, 0.1)";
+                          e.currentTarget.style.borderColor = "rgba(196, 92, 74, 0.3)";
+                          e.currentTarget.style.color = "var(--rpg-text-muted)";
+                        }}
+                      >
+                        ×
+                      </button>
                     </div>
-                    {loading === p.id && (
+                    {deletingId === p.id && (
                       <div
-                        className="w-3 h-3 border border-t-transparent rounded-full animate-spin shrink-0"
-                        style={{ borderColor: "var(--rpg-gold-dim)", borderTopColor: "transparent" }}
-                      />
+                        className="flex items-center gap-2 px-3 py-2"
+                        style={{
+                          background: "rgba(196, 92, 74, 0.08)",
+                          border: "1px solid rgba(196, 92, 74, 0.3)",
+                          borderTop: "none",
+                        }}
+                      >
+                        <span
+                          className="rpg-mono text-[10px] flex-1"
+                          style={{ color: "#c45c4a" }}
+                        >
+                          REMOVE FROM LIST?
+                        </span>
+                        <button
+                          onClick={async () => {
+                            await deleteProject(p.id);
+                            setDeletingId(null);
+                          }}
+                          className="rpg-mono text-[10px] px-2 py-0.5 cursor-pointer transition-all"
+                          style={{
+                            background: "rgba(196, 92, 74, 0.2)",
+                            border: "1px solid rgba(196, 92, 74, 0.5)",
+                            color: "#c45c4a",
+                          }}
+                        >
+                          CONFIRM
+                        </button>
+                        <button
+                          onClick={() => setDeletingId(null)}
+                          className="rpg-mono text-[10px] px-2 py-0.5 cursor-pointer transition-all"
+                          style={{
+                            background: "transparent",
+                            border: "1px solid var(--rpg-border)",
+                            color: "var(--rpg-text-muted)",
+                          }}
+                        >
+                          CANCEL
+                        </button>
+                      </div>
                     )}
-                  </button>
+                  </div>
                 ))}
               </div>
             )}

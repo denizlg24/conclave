@@ -1,11 +1,15 @@
-import { Effect, Exit, Scope, Stream } from "effect";
+import { Effect, Exit, Schema, Scope, Stream } from "effect";
 import { join } from "node:path";
 
 import type { BusEvent } from "@/shared/types/bus-event";
 import type {
+  AgentRole,
+  OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  TaskType,
 } from "@/shared/types/orchestration";
+import { OrchestrationCommand as OrchestrationCommandSchema } from "@/shared/types/orchestration";
 import type { AgentId, CommandId, MeetingId, TaskId } from "@/shared/types/base-schemas";
 
 import {
@@ -22,10 +26,13 @@ import { createReviewMeetingReactor } from "@/core/communication/review-meeting-
 import { createMeetingOrchestrator } from "@/core/meetings";
 import { createAgentService } from "@/core/agents/service";
 import { createClaudeCodeAdapter } from "@/core/agents/claude-code-adapter";
+import { createOpenAICodexAdapter } from "@/core/agents/openai-codex-adapter";
+import { createAgentRuntimeEventStore } from "@/core/memory/agent-runtime-event-store";
 import { createPersistentEventStore } from "@/core/memory/persistent-event-store";
 import { createDecisionLogStore } from "@/core/memory/decision-log-store";
 import { createSuspensionStore } from "@/core/memory/suspension-store";
 import { createResumeHandler } from "./resume-handler";
+import { DEFAULT_ADAPTER_TYPE, type AdapterType } from "@/shared/types/adapter";
 
 import type {
   SerializedAgentRoster,
@@ -151,6 +158,15 @@ export interface ConclaveShape {
   readonly shutdown: () => Promise<void>;
 }
 
+function createAgentAdapter(adapterType: AdapterType) {
+  switch (adapterType) {
+    case "claude-code":
+      return createClaudeCodeAdapter();
+    case "openai-codex":
+      return createOpenAICodexAdapter();
+  }
+}
+
 type AgentRuntimeEventRecord = {
   type: string;
   agentId: string;
@@ -159,19 +175,46 @@ type AgentRuntimeEventRecord = {
   [key: string]: unknown;
 };
 
-export async function bootstrapConclave(projectPath: string): Promise<ConclaveShape> {
+function decodeCommand(command: unknown): OrchestrationCommand {
+  return Schema.decodeUnknownSync(OrchestrationCommandSchema)(command);
+}
+
+function decisionTypeForTask(taskType: TaskType):
+  | "task_decomposition"
+  | "task_assignment"
+  | "task_execution"
+  | "code_review"
+  | "test_result" {
+  switch (taskType) {
+    case "planning":
+    case "decomposition":
+      return "task_decomposition";
+    case "review":
+      return "code_review";
+    case "testing":
+      return "test_result";
+    case "implementation":
+      return "task_execution";
+  }
+}
+
+export async function bootstrapConclave(
+  projectPath: string,
+  adapterType: AdapterType = DEFAULT_ADAPTER_TYPE,
+): Promise<ConclaveShape> {
   const scope = Effect.runSync(Scope.make());
   const memoryPath = join(projectPath, ".conclave", "memory");
 
   const program = Effect.gen(function* () {
     const bus = yield* createEventBus();
+    const agentRuntimeEventStore = yield* createAgentRuntimeEventStore({ storagePath: memoryPath });
     const eventStore = yield* createPersistentEventStore({ storagePath: memoryPath });
     const decisionLog = yield* createDecisionLogStore({ storagePath: memoryPath });
     const suspensionStore = yield* createSuspensionStore({ storagePath: memoryPath });
     const engine = yield* createOrchestrationEngine({ eventBus: bus, eventStore });
     const receiptStore = yield* createReceiptStore();
 
-    const adapter = yield* createClaudeCodeAdapter();
+    const adapter = yield* createAgentAdapter(adapterType);
     const agentService = createAgentService(adapter);
 
     yield* agentService.startAgent(
@@ -233,13 +276,13 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
 
     agentService.onRosterChange(() => {
       Effect.runPromise(agentService.listAgents()).then((sessions) => {
-        const roster: SerializedAgentRoster = {
-          agents: sessions.map((s) => ({
-            agentId: s.agentId,
-            role: s.role,
-            sessionId: s.claudeSessionId,
-          })),
-        };
+          const roster: SerializedAgentRoster = {
+            agents: sessions.map((s) => ({
+              agentId: s.agentId,
+              role: s.role,
+              sessionId: s.sessionId,
+            })),
+          };
         for (const cb of rosterCallbacks) cb(roster);
       });
     });
@@ -255,6 +298,62 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
           }
           const orchEvent = event as OrchestrationEvent;
           const model = yield* engine.getReadModel();
+
+          if (orchEvent.type === "task.assigned") {
+            const task = model.tasks.find((candidate) => candidate.id === orchEvent.payload.taskId);
+            if (task) {
+              yield* decisionLog.log({
+                type: "task_assignment",
+                agentId: orchEvent.payload.agentId,
+                agentRole: orchEvent.payload.agentRole,
+                context: { taskId: task.id },
+                rationale: task.description,
+                outcome: `Assigned to ${orchEvent.payload.agentRole} (${orchEvent.payload.agentId}).`,
+              });
+            }
+          }
+
+          if (orchEvent.type === "task.status-updated") {
+            const task = model.tasks.find((candidate) => candidate.id === orchEvent.payload.taskId);
+            if (
+              task?.owner &&
+              task.ownerRole &&
+              ["review", "done", "failed", "suspended"].includes(orchEvent.payload.status)
+            ) {
+              yield* decisionLog.log({
+                type: decisionTypeForTask(task.taskType),
+                agentId: task.owner,
+                agentRole: task.ownerRole,
+                context: { taskId: task.id },
+                rationale:
+                  typeof task.output === "string"
+                    ? task.output
+                    : task.description,
+                outcome:
+                  typeof orchEvent.payload.reason === "string" && orchEvent.payload.reason.length > 0
+                    ? orchEvent.payload.reason
+                    : `Task moved to ${orchEvent.payload.status}.`,
+              });
+            }
+          }
+
+          if (orchEvent.type === "meeting.completed") {
+            const pmAgent = (yield* agentService.listAgents()).find(
+              (agent) => agent.role === "pm",
+            );
+            if (pmAgent) {
+              yield* decisionLog.log({
+                type: "meeting_summary",
+                agentId: pmAgent.agentId,
+                agentRole: "pm" as AgentRole,
+                context: { meetingId: orchEvent.payload.meetingId },
+                rationale: orchEvent.payload.summary,
+                outcome: orchEvent.payload.summary,
+                artifacts: [...orchEvent.payload.proposedTaskIds],
+              });
+            }
+          }
+
           const serializedEvent = serializeEvent(orchEvent);
           const serializedModel = serializeReadModel(model);
           for (const cb of eventCallbacks) {
@@ -267,7 +366,10 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
 
     yield* agentService.streamEvents.pipe(
       Stream.runForEach((event) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          yield* agentRuntimeEventStore.append(event);
+          yield* bus.publish(event);
+
           const record = event as unknown as AgentRuntimeEventRecord;
           for (const cb of agentEventCallbacks) {
             cb(record);
@@ -291,13 +393,14 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
       Effect.forkScoped,
     ).pipe(Effect.provideService(Scope.Scope, scope));
 
-    return { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks };
+    return { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks, agentRuntimeEventStore };
   });
 
-  const { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks } = await Effect.runPromise(program);
+  const { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks, agentRuntimeEventStore } = await Effect.runPromise(program);
 
   const existingDecisions = await Effect.runPromise(decisionLog.getAll());
-  console.log(`[conclave] Memory initialized: ${existingDecisions.length} decision log entries loaded`);
+  const existingAgentEvents = await Effect.runPromise(agentRuntimeEventStore.readAll());
+  console.log(`[conclave] Memory initialized: ${existingDecisions.length} decision log entries loaded, ${existingAgentEvents.length} agent runtime events loaded`);
 
   const getSerializedState = async (): Promise<SerializedReadModel> => {
     const model = await Effect.runPromise(engine.getReadModel());
@@ -310,7 +413,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
       agents: sessions.map((s) => ({
         agentId: s.agentId,
         role: s.role,
-        sessionId: s.claudeSessionId,
+        sessionId: s.sessionId,
       })),
     };
   };
@@ -332,7 +435,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     const message = params.message;
 
     await Effect.runPromise(
-      engine.dispatch({
+      engine.dispatch(decodeCommand({
         type: "meeting.schedule",
         schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
@@ -341,21 +444,21 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
         agenda: [message],
         participants: ["pm", "developer", "reviewer", "tester"],
         createdAt: new Date().toISOString(),
-      }),
+      })),
     );
 
     await Effect.runPromise(
-      engine.dispatch({
+      engine.dispatch(decodeCommand({
         type: "meeting.start",
         schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
         meetingId: meetingId as MeetingId,
         createdAt: new Date().toISOString(),
-      }),
+      })),
     );
 
     await Effect.runPromise(
-      engine.dispatch({
+      engine.dispatch(decodeCommand({
         type: "task.create",
         schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
@@ -366,7 +469,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
         deps: [] as TaskId[],
         input: { meetingId },
         createdAt: new Date().toISOString(),
-      }),
+      })),
     );
 
     return { taskId, meetingId };
@@ -380,7 +483,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
   }): Promise<{ taskId: string }> => {
     const taskId = crypto.randomUUID();
     await Effect.runPromise(
-      engine.dispatch({
+      engine.dispatch(decodeCommand({
         type: "task.create",
         schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
@@ -391,7 +494,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
         deps: params.deps as TaskId[],
         input: null,
         createdAt: new Date().toISOString(),
-      }),
+      })),
     );
     return { taskId };
   };
@@ -402,7 +505,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     reason?: string;
   }): Promise<{ success: boolean }> => {
     await Effect.runPromise(
-      engine.dispatch({
+      engine.dispatch(decodeCommand({
         type: "task.update-status",
         schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
@@ -410,7 +513,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
         status: params.status as "pending",
         reason: params.reason,
         createdAt: new Date().toISOString(),
-      }),
+      })),
     );
     return { success: true };
   };
@@ -421,7 +524,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
     rejectedTaskIds: string[];
   }): Promise<{ success: boolean }> => {
     await Effect.runPromise(
-      engine.dispatch({
+      engine.dispatch(decodeCommand({
         type: "meeting.approve-tasks",
         schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
@@ -429,7 +532,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
         approvedTaskIds: params.approvedTaskIds as TaskId[],
         rejectedTaskIds: params.rejectedTaskIds as TaskId[],
         createdAt: new Date().toISOString(),
-      }),
+      })),
     );
     return { success: true };
   };
@@ -441,7 +544,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
   }): Promise<{ meetingId: string }> => {
     const meetingId = crypto.randomUUID();
     await Effect.runPromise(
-      engine.dispatch({
+      engine.dispatch(decodeCommand({
         type: "meeting.schedule",
         schemaVersion: 1 as const,
         commandId: crypto.randomUUID() as CommandId,
@@ -450,7 +553,7 @@ export async function bootstrapConclave(projectPath: string): Promise<ConclaveSh
         agenda: params.agenda,
         participants: params.participants as Array<"pm" | "developer" | "reviewer" | "tester">,
         createdAt: new Date().toISOString(),
-      }),
+      })),
     );
     return { meetingId };
   };

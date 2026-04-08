@@ -12,6 +12,15 @@ export {
 } from "./base-schemas";
 
 export {
+  ADAPTER_TYPES,
+  ADAPTER_OPTIONS,
+  DEFAULT_ADAPTER_TYPE,
+  isAdapterType,
+  type AdapterOption,
+  type AdapterType,
+} from "./adapter";
+
+export {
   TaskStatus,
   TaskType,
   AgentRole,

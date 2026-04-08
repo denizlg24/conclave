@@ -1,6 +1,7 @@
 import type { Effect, Stream } from "effect";
 
 import type { AgentId, TaskId } from "@/shared/types/base-schemas";
+import type { AdapterType } from "@/shared/types/adapter";
 import type {
   AgentRoleConfig,
   AgentRuntimeEvent,
@@ -12,8 +13,9 @@ import type { AgentError } from "./errors";
 
 export interface AgentSession {
   readonly agentId: AgentId;
+  readonly adapterType: AdapterType;
   readonly role: AgentRole;
-  readonly claudeSessionId: string;
+  readonly sessionId: string;
   readonly model: string;
   readonly config: AgentRoleConfig;
   readonly cumulativeUsage: TokenUsage;
@@ -36,7 +38,7 @@ export interface QuotaExhaustedCheckResult {
  * Each adapter type implements its own patterns.
  */
 export interface QuotaExhaustedDetector {
-  readonly adapterType: string;
+  readonly adapterType: AdapterType;
   /**
    * Check if the given output or error message indicates quota exhaustion.
    * @param content - stdout/stderr content or error message to check
@@ -46,6 +48,8 @@ export interface QuotaExhaustedDetector {
 }
 
 export interface AgentAdapterShape {
+  readonly adapterType: AdapterType;
+
   readonly startSession: (
     agentId: AgentId,
     config: AgentRoleConfig,
