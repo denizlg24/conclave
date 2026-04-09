@@ -10,11 +10,13 @@ export function ProjectScreen() {
     projects,
     selectedAdapter,
     availableAdapters,
+    selectedModels,
     createProject,
     openDirectory,
     browseForDirectory,
     loadProject,
     setSelectedAdapter,
+    setAdapterModel,
     deleteProject,
   } = useConclave();
   const [showNewForm, setShowNewForm] = useState(false);
@@ -23,11 +25,19 @@ export function ProjectScreen() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [adapterLoading, setAdapterLoading] = useState<AdapterType | null>(null);
+  const [modelLoading, setModelLoading] = useState<AdapterType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const adapterOptions =
     availableAdapters.length > 0 ? availableAdapters : ADAPTER_OPTIONS;
+  const activeAdapter =
+    adapterOptions.find((adapter) => adapter.type === selectedAdapter) ??
+    adapterOptions[0];
+  const activeModel =
+    activeAdapter
+      ? selectedModels[activeAdapter.type] ?? activeAdapter.defaultModel
+      : "";
 
   const handleBrowse = async () => {
     setError(null);
@@ -96,19 +106,48 @@ export function ProjectScreen() {
     }
   };
 
+  const handleAdapterModelChange = async (
+    adapterType: AdapterType,
+    model: string,
+  ) => {
+    const adapter = adapterOptions.find((option) => option.type === adapterType);
+    const currentModel = adapter
+      ? selectedModels[adapterType] ?? adapter.defaultModel
+      : null;
+
+    if (
+      currentModel === model ||
+      loading !== null ||
+      adapterLoading !== null ||
+      modelLoading !== null
+    ) {
+      return;
+    }
+
+    setError(null);
+    setModelLoading(adapterType);
+    try {
+      await setAdapterModel(adapterType, model);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setModelLoading(null);
+    }
+  };
+
   return (
     <main
-      className="w-full flex items-center justify-center"
+      className="flex items-center justify-center overflow-hidden"
       style={{
         background: `
           radial-gradient(ellipse at 50% 30%, rgba(200, 169, 110, 0.06) 0%, transparent 60%),
           radial-gradient(ellipse at 50% 80%, rgba(161, 188, 152, 0.04) 0%, transparent 50%),
           var(--rpg-bg)
         `,
-        height: "100%",
+        width: "var(--app-width, 100%)",
+        height: "var(--app-height, 100%)",
       }}
     >
-      {/* Decorative border lines */}
       <div
         className="absolute inset-8 pointer-events-none"
         style={{ border: "1px solid rgba(58, 74, 53, 0.2)" }}
@@ -119,7 +158,6 @@ export function ProjectScreen() {
       />
 
       <div className="w-[480px] flex flex-col items-center">
-        {/* Title */}
         <div className="text-center mb-10">
           <h1
             className="rpg-font text-[28px] tracking-[0.3em]"
@@ -144,7 +182,6 @@ export function ProjectScreen() {
           />
         </div>
 
-        {/* Main menu */}
         <div className="w-full rpg-panel overflow-hidden">
           <div
             className="px-5 py-4"
@@ -160,13 +197,14 @@ export function ProjectScreen() {
               {adapterOptions.map((adapter) => {
                 const active = adapter.type === selectedAdapter;
                 const isBusy = adapterLoading === adapter.type;
+                const isModelBusy = modelLoading === adapter.type;
+                const selectedModel =
+                  selectedModels[adapter.type] ?? adapter.defaultModel;
 
                 return (
-                  <button
+                  <div
                     key={adapter.type}
-                    onClick={() => handleAdapterSelect(adapter.type)}
-                    disabled={loading !== null || adapterLoading !== null}
-                    className="text-left px-3 py-3 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-3 py-3 transition-all"
                     style={{
                       background: active
                         ? "rgba(200, 169, 110, 0.08)"
@@ -176,43 +214,101 @@ export function ProjectScreen() {
                         : "1px solid var(--rpg-border)",
                     }}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className="rpg-mono text-[11px]"
-                        style={{
-                          color: active
-                            ? "var(--rpg-gold)"
-                            : "var(--rpg-text)",
-                        }}
-                      >
-                        {adapter.label}
-                      </span>
-                      <span
-                        className="rpg-mono text-[8px] uppercase tracking-wider"
+                    <button
+                      onClick={() => handleAdapterSelect(adapter.type)}
+                      disabled={
+                        loading !== null ||
+                        adapterLoading !== null ||
+                        modelLoading !== null
+                      }
+                      className="w-full text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className="rpg-mono text-[11px]"
+                          style={{
+                            color: active
+                              ? "var(--rpg-gold)"
+                              : "var(--rpg-text)",
+                          }}
+                        >
+                          {adapter.label}
+                        </span>
+                        <span
+                          className="rpg-mono text-[8px] uppercase tracking-wider"
+                          style={{ color: "var(--rpg-text-muted)" }}
+                        >
+                          {isBusy ? "..." : adapter.provider}
+                        </span>
+                      </div>
+                      <p
+                        className="rpg-mono text-[9px] mt-2 leading-relaxed"
                         style={{ color: "var(--rpg-text-muted)" }}
                       >
-                        {isBusy ? "..." : adapter.provider}
-                      </span>
+                        {adapter.description}
+                      </p>
+                    </button>
+
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span
+                          className="rpg-mono text-[8px] uppercase tracking-wider"
+                          style={{ color: "var(--rpg-text-muted)" }}
+                        >
+                          Model
+                        </span>
+                        <span
+                          className="rpg-mono text-[8px] uppercase tracking-wider"
+                          style={{
+                            color: isModelBusy
+                              ? "var(--rpg-gold)"
+                              : "var(--rpg-text-muted)",
+                          }}
+                        >
+                          {isModelBusy ? "Saving" : active ? "Active" : "Stored"}
+                        </span>
+                      </div>
+                      <select
+                        value={selectedModel}
+                        disabled={
+                          loading !== null ||
+                          adapterLoading !== null ||
+                          modelLoading !== null
+                        }
+                        onChange={(e) =>
+                          handleAdapterModelChange(
+                            adapter.type,
+                            e.target.value,
+                          )
+                        }
+                        className="w-full rpg-mono text-[10px] px-2.5 py-2 outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{
+                          background: "rgba(12, 16, 12, 0.82)",
+                          border: "1px solid rgba(58, 74, 53, 0.65)",
+                          color: "var(--rpg-text)",
+                        }}
+                      >
+                        {adapter.models.map((model) => (
+                          <option key={model.value} value={model.value}>
+                            {model.label} · {model.description}
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                    <p
-                      className="rpg-mono text-[9px] mt-2 leading-relaxed"
-                      style={{ color: "var(--rpg-text-muted)" }}
-                    >
-                      {adapter.description}
-                    </p>
-                  </button>
+                  </div>
                 );
               })}
             </div>
             <p
-              className="rpg-mono text-[9px] mt-3"
+              className="rpg-mono text-[9px] mt-3 leading-relaxed"
               style={{ color: "var(--rpg-text-muted)" }}
             >
-              The selected adapter is used when you start or load the next campaign.
+              The next campaign will start with{" "}
+              {activeAdapter?.label ?? "the selected adapter"} on{" "}
+              <span style={{ color: "var(--rpg-text)" }}>{activeModel}</span>.
             </p>
           </div>
 
-          {/* Menu actions */}
           <div
             className="flex flex-col"
             style={{ borderBottom: "1px solid var(--rpg-border)" }}
@@ -232,7 +328,6 @@ export function ProjectScreen() {
             </MenuButton>
           </div>
 
-          {/* New campaign form */}
           {showNewForm && (
             <div
               className="px-5 py-4 space-y-3"
@@ -312,7 +407,6 @@ export function ProjectScreen() {
             </div>
           )}
 
-          {/* Saved campaigns */}
           <div className="px-5 py-4">
             <span
               className="rpg-font text-[9px] tracking-wider block mb-3"
@@ -320,7 +414,6 @@ export function ProjectScreen() {
             >
               {projects.length > 0 ? "CONTINUE CAMPAIGN" : "NO CAMPAIGNS"}
             </span>
-
             {projects.length === 0 ? (
               <p
                 className="rpg-mono text-[10px] text-center py-4"
@@ -343,7 +436,8 @@ export function ProjectScreen() {
                         style={{ background: "transparent" }}
                         onMouseEnter={(e) => {
                           if (deletingId !== p.id) {
-                            e.currentTarget.style.background = "rgba(200, 169, 110, 0.05)";
+                            e.currentTarget.style.background =
+                              "rgba(200, 169, 110, 0.05)";
                           }
                         }}
                         onMouseLeave={(e) => {
@@ -373,7 +467,10 @@ export function ProjectScreen() {
                         {loading === p.id && (
                           <div
                             className="w-3 h-3 border border-t-transparent rounded-full animate-spin shrink-0"
-                            style={{ borderColor: "var(--rpg-gold-dim)", borderTopColor: "transparent" }}
+                            style={{
+                              borderColor: "var(--rpg-gold-dim)",
+                              borderTopColor: "transparent",
+                            }}
                           />
                         )}
                       </button>
@@ -387,14 +484,19 @@ export function ProjectScreen() {
                           color: "var(--rpg-text-muted)",
                         }}
                         onMouseEnter={(e) => {
-                          e.currentTarget.style.background = "rgba(196, 92, 74, 0.2)";
-                          e.currentTarget.style.borderColor = "rgba(196, 92, 74, 0.6)";
+                          e.currentTarget.style.background =
+                            "rgba(196, 92, 74, 0.2)";
+                          e.currentTarget.style.borderColor =
+                            "rgba(196, 92, 74, 0.6)";
                           e.currentTarget.style.color = "#c45c4a";
                         }}
                         onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "rgba(196, 92, 74, 0.1)";
-                          e.currentTarget.style.borderColor = "rgba(196, 92, 74, 0.3)";
-                          e.currentTarget.style.color = "var(--rpg-text-muted)";
+                          e.currentTarget.style.background =
+                            "rgba(196, 92, 74, 0.1)";
+                          e.currentTarget.style.borderColor =
+                            "rgba(196, 92, 74, 0.3)";
+                          e.currentTarget.style.color =
+                            "var(--rpg-text-muted)";
                         }}
                       >
                         ×
@@ -448,7 +550,6 @@ export function ProjectScreen() {
             )}
           </div>
 
-          {/* Error display */}
           {error && (
             <div
               className="px-5 py-2"
@@ -464,7 +565,6 @@ export function ProjectScreen() {
           )}
         </div>
 
-        {/* Version tag */}
         <span
           className="rpg-mono text-[8px] mt-6"
           style={{ color: "var(--rpg-text-muted)" }}

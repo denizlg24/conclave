@@ -193,7 +193,7 @@ export function ApprovalQueue() {
                   setProcessing(true);
                   try {
                     for (const task of ungrouped) {
-                      await updateTaskStatus({ taskId: task.id, status: "failed", reason: "Manually rejected" });
+                      await updateTaskStatus({ taskId: task.id, status: "rejected", reason: "Manually rejected" });
                     }
                     clearSelection(ungrouped.map((t) => t.id));
                   } catch (err) {

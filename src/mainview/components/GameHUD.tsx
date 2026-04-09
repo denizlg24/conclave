@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useConclave } from "../hooks/use-conclave";
 import { CommandBar } from "./CommandBar";
 import { MeetingViewer } from "./MeetingViewer";
+import { ApprovalQueue } from "./approvals";
+import { DebugConsole } from "./DebugConsole";
 
 const STATUS_COLORS: Record<string, string> = {
   proposed: "#c8a96e",
@@ -29,16 +31,24 @@ const STATUS_ICONS: Record<string, string> = {
   rejected: "\u2718",
 };
 
-type Panel = "quests" | "journal" | "party" | "approvals" | "council" | "suspended" | null;
+type Panel =
+  | "quests"
+  | "journal"
+  | "party"
+  | "console"
+  | "approvals"
+  | "council"
+  | "suspended"
+  | null;
 
 export function GameHUD() {
   const {
     readModel,
     events,
     agentEvents,
+    debugConsoleEntries,
     connected,
     activeProject,
-    approveProposedTasks,
     resumeSuspendedTask,
     unloadProject,
   } = useConclave();
@@ -95,6 +105,9 @@ export function GameHUD() {
           break;
         case "p":
           togglePanel("party");
+          break;
+        case "l":
+          togglePanel("console");
           break;
         case "c":
           togglePanel("council");
@@ -295,6 +308,13 @@ export function GameHUD() {
             active={activePanel === "party"}
             count={agentEvents.length}
             onClick={() => togglePanel("party")}
+          />
+          <ActionButton
+            label="CONSOLE"
+            hotkey="L"
+            active={activePanel === "console"}
+            count={debugConsoleEntries.length}
+            onClick={() => togglePanel("console")}
           />
           <ActionButton
             label="COUNCIL"
@@ -556,140 +576,19 @@ export function GameHUD() {
       )}
 
       {activePanel === "approvals" && (
-        <RPGPanel
-          title="PENDING DECREES"
-          onClose={() => setActivePanel(null)}
-        >
-          {proposedTasks.length === 0 ? (
-            <EmptyState>No decrees pending</EmptyState>
-          ) : (
-            proposedTasks.map((t) => {
-              const meetingId = (t.input as Record<string, unknown> | null)
-                ?.proposedByMeeting as string | undefined;
-              const meeting = meetingId
-                ? meetings.find((m) => m.id === meetingId)
-                : undefined;
-              return (
-                <div
-                  key={t.id}
-                  className="px-3 py-3 space-y-2"
-                  style={{
-                    borderBottom: "1px solid var(--rpg-border)",
-                  }}
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="rpg-mono text-[10px] uppercase"
-                      style={{ color: "var(--rpg-copper)" }}
-                    >
-                      {t.taskType}
-                    </span>
-                    <span
-                      className="rpg-mono text-[11px]"
-                      style={{ color: "var(--rpg-text)" }}
-                    >
-                      {t.title}
-                    </span>
-                  </div>
-                  {t.description && (
-                    <p
-                      className="rpg-mono text-[10px]"
-                      style={{ color: "var(--rpg-text-dim)" }}
-                    >
-                      {t.description.slice(0, 150)}
-                      {t.description.length > 150 ? "\u2026" : ""}
-                    </p>
-                  )}
-                  {meeting && (
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="rpg-mono text-[10px]"
-                        style={{ color: "var(--rpg-text-muted)" }}
-                      >
-                        Proposed during {meeting.meetingType} council
-                      </span>
-                      <button
-                        onClick={() => {
-                          setHighlightMeetingId(meeting.id);
-                          setActivePanel("council");
-                        }}
-                        className="rpg-mono text-[9px] px-1.5 py-0.5 cursor-pointer transition-all"
-                        style={{
-                          background: "rgba(200, 169, 110, 0.1)",
-                          border: "1px solid var(--rpg-gold-dim)",
-                          color: "var(--rpg-gold-dim)",
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = "rgba(200, 169, 110, 0.2)";
-                          e.currentTarget.style.color = "var(--rpg-gold)";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "rgba(200, 169, 110, 0.1)";
-                          e.currentTarget.style.color = "var(--rpg-gold-dim)";
-                        }}
-                      >
-                        VIEW COUNCIL
-                      </button>
-                    </div>
-                  )}
-                  {meetingId && (
-                    <div className="flex gap-2 pt-1">
-                      <button
-                        onClick={() =>
-                          approveProposedTasks({
-                            meetingId,
-                            approvedTaskIds: [t.id],
-                            rejectedTaskIds: [],
-                          })
-                        }
-                        className="rpg-mono text-[10px] px-3 py-1 cursor-pointer transition-all"
-                        style={{
-                          background: "rgba(106, 153, 78, 0.2)",
-                          border: "1px solid rgba(106, 153, 78, 0.4)",
-                          color: "#6a994e",
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = "rgba(106, 153, 78, 0.35)";
-                          e.currentTarget.style.borderColor = "#6a994e";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "rgba(106, 153, 78, 0.2)";
-                          e.currentTarget.style.borderColor = "rgba(106, 153, 78, 0.4)";
-                        }}
-                      >
-                        APPROVE
-                      </button>
-                      <button
-                        onClick={() =>
-                          approveProposedTasks({
-                            meetingId,
-                            approvedTaskIds: [],
-                            rejectedTaskIds: [t.id],
-                          })
-                        }
-                        className="rpg-mono text-[10px] px-3 py-1 cursor-pointer transition-all"
-                        style={{
-                          background: "rgba(196, 92, 74, 0.15)",
-                          border: "1px solid rgba(196, 92, 74, 0.3)",
-                          color: "#c45c4a",
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = "rgba(196, 92, 74, 0.3)";
-                          e.currentTarget.style.borderColor = "#c45c4a";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "rgba(196, 92, 74, 0.15)";
-                          e.currentTarget.style.borderColor = "rgba(196, 92, 74, 0.3)";
-                        }}
-                      >
-                        REJECT
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
+        <RPGPanel title="PENDING DECREES" onClose={() => setActivePanel(null)}>
+          <ApprovalQueue
+            onViewCouncil={(meetingId) => {
+              setHighlightMeetingId(meetingId);
+              setActivePanel("council");
+            }}
+          />
+        </RPGPanel>
+      )}
+
+      {activePanel === "console" && (
+        <RPGPanel title="DEBUG CONSOLE" onClose={() => setActivePanel(null)}>
+          <DebugConsole embedded />
         </RPGPanel>
       )}
 

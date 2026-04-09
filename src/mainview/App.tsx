@@ -9,20 +9,50 @@ import { QuotaExhaustedDialog } from "./components/QuotaExhaustedDialog";
 import type { SerializedAgentInfo } from "../shared/rpc/rpc-schema";
 import officeBg from "./assets/office_bg.png";
 
+const APP_WIDTH_VAR = "--app-width";
 const APP_HEIGHT_VAR = "--app-height";
+const APP_VIEWPORT_WIDTH = `var(${APP_WIDTH_VAR}, 100%)`;
+const APP_VIEWPORT_HEIGHT = `var(${APP_HEIGHT_VAR}, 100%)`;
 
-function syncAppHeight() {
-  // Use clientHeight — it reflects the actual rendered area of the webview,
-  // unlike 100vh / innerHeight which can include the native title bar in Electrobun.
-  const viewportHeight =
-    document.documentElement.clientHeight || window.innerHeight;
-  document.documentElement.style.setProperty(
-    APP_HEIGHT_VAR,
-    `${Math.round(viewportHeight)}px`,
-  );
+function readAppViewportSize(): { width: number; height: number } {
+  const root = document.getElementById("root");
+  const viewportWidths = [
+    window.visualViewport?.width,
+    document.documentElement.clientWidth,
+    document.body?.clientWidth,
+    root?.clientWidth,
+    window.innerWidth,
+  ].filter((width): width is number => typeof width === "number" && width > 0);
+  const viewportHeights = [
+    window.visualViewport?.height,
+    document.documentElement.clientHeight,
+    document.body?.clientHeight,
+    root?.clientHeight,
+    window.innerHeight,
+  ].filter((height): height is number => typeof height === "number" && height > 0);
+
+  return {
+    width:
+      viewportWidths.length > 0 ? Math.round(Math.min(...viewportWidths)) : 0,
+    height:
+      viewportHeights.length > 0
+        ? Math.round(Math.min(...viewportHeights))
+        : 0,
+  };
 }
 
-syncAppHeight();
+function syncAppViewport() {
+  const { width, height } = readAppViewportSize();
+
+  if (width > 0) {
+    document.documentElement.style.setProperty(APP_WIDTH_VAR, `${width}px`);
+  }
+  if (height > 0) {
+    document.documentElement.style.setProperty(APP_HEIGHT_VAR, `${height}px`);
+  }
+}
+
+syncAppViewport();
 
 const WORKSTATIONS: Array<{ x: number; y: number; label: string }> = [
   { x: 480, y: 552, label: "Desk A1" },
@@ -35,7 +65,7 @@ const WORKSTATIONS: Array<{ x: number; y: number; label: string }> = [
   { x: 640, y: 200, label: "Desk D2" },
 ];
 
-const PM_STATION = { x: 168, y: 430 };
+const PM_STATION = { x: 168, y: 435 };
 
 const ROLE_DESK_PREFERENCES: Record<string, number[]> = {
   pm: [],
@@ -44,9 +74,9 @@ const ROLE_DESK_PREFERENCES: Record<string, number[]> = {
   tester: [6, 7],
 };
 
-const MEETING_CENTER = { x: 168, y: 552 };
+const MEETING_CENTER = { x: 175, y: 580 };
 const MEETING_RADIUS_X = 100;
-const MEETING_RADIUS_Y = 130;
+const MEETING_RADIUS_Y = 150;
 
 function meetingSeat(index: number, total: number): { x: number; y: number } {
   const angle = (index / total) * Math.PI * 2 - Math.PI / 2;
@@ -379,8 +409,10 @@ function GameScene() {
 
   return (
     <main
-      className="w-full h-full bg-center bg-no-repeat relative overflow-hidden"
+      className="bg-center bg-no-repeat relative overflow-hidden"
       style={{
+        width: APP_VIEWPORT_WIDTH,
+        height: APP_VIEWPORT_HEIGHT,
         backgroundImage: `url(${officeBg})`,
         backgroundSize: "contain",
         backgroundColor: "var(--rpg-bg)",
@@ -451,31 +483,102 @@ function GameScene() {
 
 function AppRouter() {
   const { activeProject, connected } = useConclave();
+  const [gameSceneReady, setGameSceneReady] = useState(true);
 
   // useLayoutEffect ensures --app-height is set synchronously after DOM
   // mutation but before the browser paints, preventing the bottom bar from
   // rendering offscreen on the first frame after project load.
   useLayoutEffect(() => {
-    syncAppHeight();
+    syncAppViewport();
 
-    const schedule = () => requestAnimationFrame(syncAppHeight);
+    const animationFrames = new Set<number>();
+    const timeouts = new Set<number>();
+    const schedule = () => {
+      const frameId = requestAnimationFrame(() => {
+        animationFrames.delete(frameId);
+        syncAppViewport();
+      });
+      animationFrames.add(frameId);
+    };
+    const scheduleTimeout = (delayMs: number) => {
+      const timeoutId = window.setTimeout(() => {
+        timeouts.delete(timeoutId);
+        schedule();
+      }, delayMs);
+      timeouts.add(timeoutId);
+    };
+    const resizeObserver = new ResizeObserver(() => {
+      schedule();
+    });
+    const root = document.getElementById("root");
+
+    resizeObserver.observe(document.documentElement);
+    if (document.body) {
+      resizeObserver.observe(document.body);
+    }
+    if (root) {
+      resizeObserver.observe(root);
+    }
+
+    if (activeProject) {
+      setGameSceneReady(false);
+    } else {
+      setGameSceneReady(true);
+    }
+
+    schedule();
+    scheduleTimeout(0);
+    scheduleTimeout(100);
+    scheduleTimeout(250);
+    void document.fonts?.ready.then(() => {
+      schedule();
+    });
+    if (activeProject) {
+      const revealFrameId = requestAnimationFrame(() => {
+        const secondRevealFrameId = requestAnimationFrame(() => {
+          animationFrames.delete(secondRevealFrameId);
+          syncAppViewport();
+          setGameSceneReady(true);
+        });
+        animationFrames.add(secondRevealFrameId);
+        animationFrames.delete(revealFrameId);
+      });
+      animationFrames.add(revealFrameId);
+      scheduleTimeout(180);
+      const revealTimeoutId = window.setTimeout(() => {
+        timeouts.delete(revealTimeoutId);
+        syncAppViewport();
+        setGameSceneReady(true);
+      }, 180);
+      timeouts.add(revealTimeoutId);
+    }
 
     window.addEventListener("resize", schedule);
     window.addEventListener("orientationchange", schedule);
     window.visualViewport?.addEventListener("resize", schedule);
 
     return () => {
+      resizeObserver.disconnect();
       window.removeEventListener("resize", schedule);
       window.removeEventListener("orientationchange", schedule);
       window.visualViewport?.removeEventListener("resize", schedule);
+
+      for (const timeoutId of timeouts) {
+        window.clearTimeout(timeoutId);
+      }
+      for (const frameId of animationFrames) {
+        cancelAnimationFrame(frameId);
+      }
     };
   }, [activeProject]);
 
   if (!connected) {
     return (
       <main
-        className="w-full h-full flex items-center justify-center"
+        className="flex items-center justify-center overflow-hidden"
         style={{
+          width: APP_VIEWPORT_WIDTH,
+          height: APP_VIEWPORT_HEIGHT,
           background: "var(--rpg-bg)",
         }}
       >
@@ -507,13 +610,43 @@ function AppRouter() {
     return <ProjectScreen />;
   }
 
-  return <GameScene />;
+  if (!gameSceneReady) {
+    return (
+      <main
+        className="flex items-center justify-center overflow-hidden"
+        style={{
+          width: APP_VIEWPORT_WIDTH,
+          height: APP_VIEWPORT_HEIGHT,
+          background: "var(--rpg-bg)",
+        }}
+      >
+        <div className="flex flex-col items-center gap-2">
+          <div
+            className="rpg-font text-[12px] tracking-[0.2em]"
+            style={{ color: "var(--rpg-gold-dim)" }}
+          >
+            ENTERING WAR ROOM
+          </div>
+          <div
+            className="rpg-mono text-[10px]"
+            style={{ color: "var(--rpg-text-muted)" }}
+          >
+            Stabilizing viewport...
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return <GameScene key={activeProject.id} />;
 }
 
 export default function App() {
   return (
     <ConclaveProvider>
-      <AppRouter />
+      <div className="w-full overflow-hidden" style={{ height: APP_VIEWPORT_HEIGHT }}>
+        <AppRouter />
+      </div>
       <QuotaExhaustedDialog />
     </ConclaveProvider>
   );
