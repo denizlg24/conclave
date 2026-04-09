@@ -1,4 +1,9 @@
-import type { AdapterOption, AdapterType } from "../types/adapter";
+import type {
+  AdapterModelSelections,
+  AdapterOption,
+  AdapterType,
+} from "../types/adapter";
+import type { DebugConsoleEntry } from "../types/debug-console";
 
 export type SerializedProject = {
   id: string;
@@ -37,6 +42,8 @@ export type SerializedMeeting = {
   }>;
   summary: string | null;
   proposedTaskIds: string[];
+  approvedTaskIds: string[];
+  rejectedTaskIds: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -97,10 +104,27 @@ export type SerializedSuspendedTask = {
 };
 
 export type SerializedAdapterOption = AdapterOption;
+export type SerializedDebugConsoleEntry = DebugConsoleEntry;
+
+export type SerializedPendingProposal = {
+  proposalId: string;
+  meetingId: string;
+  /** ID of the DAG task created for this proposal (empty string if not yet created). */
+  taskId: string;
+  taskType: string;
+  title: string;
+  description: string;
+  /** Resolved dep task IDs as stored on the DAG task. */
+  deps: string[];
+  requiresApproval: boolean;
+  proposedAt: string;
+  originatingAgentRole: string;
+};
 
 export type SerializedAdapterState = {
   selectedAdapter: AdapterType;
   availableAdapters: SerializedAdapterOption[];
+  selectedModels: AdapterModelSelections;
 };
 
 export type ConclaveRPCSchema = {
@@ -137,6 +161,14 @@ export type ConclaveRPCSchema = {
       setAdapter: {
         params: { adapterType: AdapterType };
         response: SerializedAdapterState;
+      };
+      setAdapterModel: {
+        params: { adapterType: AdapterType; model: string };
+        response: SerializedAdapterState;
+      };
+      getDebugConsoleEntries: {
+        params: Record<string, never>;
+        response: SerializedDebugConsoleEntry[];
       };
 
       getAgentRoster: {
@@ -202,6 +234,10 @@ export type ConclaveRPCSchema = {
         params: { taskId: string };
         response: { success: boolean };
       };
+      getPendingProposals: {
+        params: Record<string, never>;
+        response: SerializedPendingProposal[];
+      };
       deleteProject: {
         params: { projectId: string };
         response: { success: boolean };
@@ -221,6 +257,7 @@ export type ConclaveRPCSchema = {
       onProjectLoaded: SerializedProject;
       onAgentEvent: SerializedAgentEvent;
       onAgentRoster: SerializedAgentRoster;
+      onDebugConsoleEntry: SerializedDebugConsoleEntry;
       onQuotaExhausted: {
         agentId: string;
         taskId: string;

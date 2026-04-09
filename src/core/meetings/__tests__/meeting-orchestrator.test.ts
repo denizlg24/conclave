@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { Effect, Exit, Cause, Stream } from "effect";
+import { join } from "node:path";
 
 import { createMeetingOrchestrator } from "../meeting-orchestrator";
 import { MeetingError } from "../../communication/errors";
@@ -219,7 +220,7 @@ describe("MeetingOrchestrator", () => {
       expect(contributeCommands.length).toBeGreaterThanOrEqual(1);
     });
 
-    test("fails if no PM agent available for synthesis", async () => {
+    test("fails if no PM agent is available and one cannot be spawned", async () => {
       const meetingId = makeMeetingId("meeting-4");
       const meeting = makeMeeting({
         id: meetingId,
@@ -234,16 +235,21 @@ describe("MeetingOrchestrator", () => {
       const { engine } = createMockEngine(readModel);
       // Only have a developer agent, no PM
       const devAgent = makeAgentSession({ agentId: makeAgentId("dev-agent"), role: "developer" });
-      const { service } = createMockAgentService([devAgent]);
+      const { service, mock } = createMockAgentService([devAgent]);
+      mock.responses.set(devAgent.agentId, "Developer contribution");
+      const serviceWithoutPm: AgentServiceShape = {
+        ...service,
+        findOrSpawnAgent: () => Effect.succeed(null),
+      };
 
-      const orchestrator = createMeetingOrchestrator({ engine, agentService: service });
+      const orchestrator = createMeetingOrchestrator({ engine, agentService: serviceWithoutPm });
 
       const exit = await Effect.runPromiseExit(orchestrator.runMeeting(meetingId));
 
       expect(Exit.isFailure(exit)).toBe(true);
       const error = extractError(exit);
       expect(error).toBeInstanceOf(MeetingError);
-      expect((error as MeetingError).detail).toContain("No PM agent");
+      expect((error as MeetingError).detail).toContain("No pm agent");
     });
 
     test("dispatches meeting.complete with summary", async () => {
@@ -350,6 +356,117 @@ describe("MeetingOrchestrator", () => {
       expect(result.meetingId).toBe(meetingId);
       expect(result.summary).toBe("Just some plain text without JSON");
       expect(result.proposedTaskCount).toBe(0);
+    });
+
+    test("spawns missing reviewer and pm agents for review meetings", async () => {
+      const meetingId = makeMeetingId("review-meeting-1");
+      const workSummariesDir = join(process.cwd(), ".tmp-review", "work-summaries");
+      const reviewPath = join(process.cwd(), ".tmp-review", "review.md");
+      const meeting = makeMeeting({
+        id: meetingId,
+        meetingType: "review",
+        agenda: [
+          `Work summaries available at: ${workSummariesDir}` as string & { readonly TrimmedNonEmptyString: unique symbol },
+          `Reviewer: write your review to ${reviewPath}` as string & { readonly TrimmedNonEmptyString: unique symbol },
+        ],
+        participants: ["pm", "reviewer"] as AgentRole[],
+      });
+      const readModel = {
+        ...makeEmptyReadModel(),
+        meetings: [meeting],
+      };
+
+      const { engine } = createMockEngine(readModel);
+      const spawnedReviewer = makeAgentSession({
+        agentId: makeAgentId("reviewer-agent"),
+        role: "reviewer",
+      });
+      const spawnedPm = makeAgentSession({
+        agentId: makeAgentId("pm-agent"),
+        role: "pm",
+      });
+
+      const messages: Array<{ agentId: AgentId; prompt: string }> = [];
+      const service: AgentServiceShape = {
+        startAgent: () => Effect.succeed(makeAgentSession()),
+        sendMessage: (agentId, prompt) =>
+          Effect.gen(function* () {
+            messages.push({ agentId, prompt });
+            if (agentId === spawnedReviewer.agentId) {
+              return "Structured review";
+            }
+            return '```json\n{"summary":"Review completed","proposedTasks":[]}\n```';
+          }),
+        interruptAgent: () => Effect.succeed(undefined),
+        stopAgent: () => Effect.succeed(undefined),
+        stopAll: () => Effect.succeed(undefined),
+        getAgent: () => Effect.succeed(null),
+        listAgents: () => Effect.succeed([]),
+        streamEvents: Stream.empty,
+        markBusy: () => {},
+        markAvailable: () => {},
+        findOrSpawnAgent: (role) =>
+          Effect.succeed(role === "reviewer" ? spawnedReviewer : spawnedPm),
+        getTeamComposition: () => ({
+          pm: { max: 1, active: 0 },
+          developer: { max: 3, active: 0 },
+          reviewer: { max: 1, active: 0 },
+          tester: { max: 2, active: 0 },
+        }),
+        poolConfig: {
+          maxPerRole: { pm: 1, developer: 3, reviewer: 1, tester: 2 },
+        },
+        onRosterChange: () => {},
+      };
+
+      const orchestrator = createMeetingOrchestrator({ engine, agentService: service });
+      const result = await Effect.runPromise(orchestrator.runMeeting(meetingId));
+
+      expect(result.summary).toBe("Review completed");
+      expect(messages.map((message) => message.agentId)).toEqual([
+        spawnedReviewer.agentId,
+        spawnedPm.agentId,
+      ]);
+    });
+
+    test("does not restart meetings that are already in progress", async () => {
+      const meetingId = makeMeetingId("review-meeting-2");
+      const workSummariesDir = join(process.cwd(), ".tmp-review-in-progress", "work-summaries");
+      const reviewPath = join(process.cwd(), ".tmp-review-in-progress", "review.md");
+      const meeting = makeMeeting({
+        id: meetingId,
+        meetingType: "review",
+        status: "in_progress",
+        agenda: [
+          `Work summaries available at: ${workSummariesDir}` as string & { readonly TrimmedNonEmptyString: unique symbol },
+          `Reviewer: write your review to ${reviewPath}` as string & { readonly TrimmedNonEmptyString: unique symbol },
+        ],
+        participants: ["pm", "reviewer"] as AgentRole[],
+      });
+      const readModel = {
+        ...makeEmptyReadModel(),
+        meetings: [meeting],
+      };
+
+      const { engine, mock: engineMock } = createMockEngine(readModel);
+      const pmAgent = makeAgentSession({ agentId: makeAgentId("pm-agent"), role: "pm" });
+      const reviewerAgent = makeAgentSession({
+        agentId: makeAgentId("reviewer-agent"),
+        role: "reviewer",
+      });
+      const { service, mock: serviceMock } = createMockAgentService([pmAgent, reviewerAgent]);
+
+      serviceMock.responses.set(reviewerAgent.agentId, "Structured review");
+      serviceMock.responses.set(
+        pmAgent.agentId,
+        '```json\n{"summary":"Review completed","proposedTasks":[]}\n```',
+      );
+
+      const orchestrator = createMeetingOrchestrator({ engine, agentService: service });
+      await Effect.runPromise(orchestrator.runMeeting(meetingId));
+
+      const startCommand = engineMock.dispatchedCommands.find((c) => c.type === "meeting.start");
+      expect(startCommand).toBeUndefined();
     });
   });
 });

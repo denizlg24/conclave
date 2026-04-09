@@ -30,3 +30,6 @@ export type EventId = typeof EventId.Type;
 
 export const CommandId = makeEntityId("CommandId");
 export type CommandId = typeof CommandId.Type;
+
+export const ProposalId = makeEntityId("ProposalId");
+export type ProposalId = typeof ProposalId.Type;

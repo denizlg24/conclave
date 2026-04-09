@@ -5,7 +5,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@/shared/types/orchestration";
-import type { CommandId, EventId, TaskId } from "@/shared/types/base-schemas";
+import type { CommandId, EventId, ProposalId, TaskId } from "@/shared/types/base-schemas";
 
 import { CommandInvariantError } from "./errors";
 import {
@@ -49,7 +49,7 @@ const VALID_STATUS_TRANSITIONS: Record<string, ReadonlyArray<string>> = {
   blocked: ["pending", "assigned", "failed"],
   done: [],
   failed: ["pending", "blocked"],
-  proposed: ["pending", "blocked", "failed"],
+  proposed: ["pending", "blocked", "rejected"],
   rejected: [],
   suspended: ["in_progress", "pending", "blocked", "failed"],
 };
@@ -331,7 +331,7 @@ export const decideOrchestrationCommand = Effect.fn(
         });
       }
 
-      // Transition rejected tasks: proposed → failed
+      // Transition rejected tasks: proposed → rejected
       for (const taskId of command.rejectedTaskIds) {
         events.push({
           ...withEventBase({
@@ -344,7 +344,7 @@ export const decideOrchestrationCommand = Effect.fn(
           payload: {
             taskId,
             previousStatus: "proposed",
-            status: "failed",
+            status: "rejected",
             reason: `Rejected via meeting '${command.meetingId}'`,
             updatedAt: command.createdAt,
           },
@@ -413,7 +413,35 @@ export const decideOrchestrationCommand = Effect.fn(
         allowed: ["in_progress"],
       });
 
-      return {
+      const events: EventWithoutSequence[] = [];
+
+      // Emit one meeting.task-proposed per proposed task so each proposal is an
+      // individually addressable, immutable event in the store. Downstream consumers
+      // (proposal store, approval queue) can process them independently.
+      // originatingAgentRole is "pm" because synthesis is always performed by the PM.
+      // requiresApproval is always true for MVP — human gates all meeting-derived tasks.
+      for (const proposedTask of command.proposedTasks) {
+        events.push({
+          ...withEventBase({
+            aggregateKind: "meeting",
+            aggregateId: command.meetingId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "meeting.task-proposed" as const,
+          payload: {
+            proposalId: crypto.randomUUID() as ProposalId,
+            meetingId: command.meetingId,
+            agendaItemIndex: 0,
+            proposedTask,
+            originatingAgentRole: "pm" as const,
+            requiresApproval: true,
+            proposedAt: command.createdAt,
+          },
+        });
+      }
+
+      events.push({
         ...withEventBase({
           aggregateKind: "meeting",
           aggregateId: command.meetingId,
@@ -427,6 +455,37 @@ export const decideOrchestrationCommand = Effect.fn(
           proposedTaskIds: [],
           proposedTasks: command.proposedTasks,
           completedAt: command.createdAt,
+        },
+      });
+
+      return events;
+    }
+
+    case "meeting.propose-task": {
+      yield* requireMeetingStatus({
+        readModel,
+        command,
+        meetingId: command.meetingId,
+        allowed: ["scheduled", "in_progress"],
+      });
+
+      return {
+        ...withEventBase({
+          aggregateKind: "meeting",
+          aggregateId: command.meetingId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+          metadata: { agentRole: command.originatingAgentRole },
+        }),
+        type: "meeting.task-proposed" as const,
+        payload: {
+          proposalId: command.proposalId,
+          meetingId: command.meetingId,
+          agendaItemIndex: command.agendaItemIndex,
+          proposedTask: command.proposedTask,
+          originatingAgentRole: command.originatingAgentRole,
+          requiresApproval: command.requiresApproval,
+          proposedAt: command.createdAt,
         },
       };
     }

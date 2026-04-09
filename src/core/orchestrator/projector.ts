@@ -276,6 +276,14 @@ export function projectEvent(
       };
     }
 
+    case "meeting.task-proposed": {
+      // Individual proposal events are the immutable audit record.
+      // The meeting read-model does not need to be updated here — task creation
+      // and approval tracking flow through meeting.completed and meeting.tasks-approved.
+      // Downstream consumers (MeetingTaskProposalStore) subscribe to this event directly.
+      return base;
+    }
+
     default: {
       event satisfies never;
       return base;

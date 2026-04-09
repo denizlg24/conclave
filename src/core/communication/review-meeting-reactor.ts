@@ -12,8 +12,22 @@ import type { EventBusShape } from "./event-bus";
 import type { ReceiptStoreShape } from "./receipt-store";
 import type { MeetingOrchestratorShape } from "../meetings/meeting-orchestrator";
 import { createReviewFiles } from "./review-files";
+import { MeetingError } from "./errors";
 
 const REACTOR_NAME = "review-meeting-reactor";
+
+function formatReactorError(error: unknown): string {
+  if (error instanceof MeetingError) {
+    return `${error._tag}(${error.operation}): ${error.detail}`;
+  }
+
+  if (typeof error === "object" && error !== null && "_tag" in error) {
+    const tagged = error as { readonly _tag: string };
+    return tagged._tag;
+  }
+
+  return String(error);
+}
 
 function isTaskStatusUpdated(
   event: BusEvent,
@@ -152,7 +166,7 @@ export function createReviewMeetingReactor(deps: {
       handleStatusUpdate(event).pipe(
         Effect.catch((error: unknown) =>
           Effect.logWarning(
-            `[${REACTOR_NAME}] Failed to handle task.status-updated: ${String(error)}`,
+            `[${REACTOR_NAME}] Failed to handle task.status-updated: ${formatReactorError(error)}`,
           ),
         ),
       ),

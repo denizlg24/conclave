@@ -9,6 +9,8 @@ import type { OrchestrationEngineShape } from "../orchestrator/engine";
 import type { AgentServiceShape } from "../agents/service";
 import type { EventBusShape } from "./event-bus";
 import type { ReceiptStoreShape } from "./receipt-store";
+import type { MeetingTaskProposalStoreShape } from "../memory/meeting-task-proposal-store";
+import { materializeProposalTasksForMeeting } from "./proposal-task-materializer";
 
 const REACTOR_NAME = "orchestrator-reactor";
 
@@ -36,8 +38,9 @@ export function createOrchestratorReactor(deps: {
   readonly receiptStore: ReceiptStoreShape;
   readonly agentService: AgentServiceShape;
   readonly workingDirectory: string;
+  readonly proposalStore: MeetingTaskProposalStoreShape;
 }): Effect.Effect<Fiber.Fiber<void>, never, Scope.Scope> {
-  const { engine, bus, receiptStore, agentService, workingDirectory } = deps;
+  const { engine, bus, receiptStore, agentService, workingDirectory, proposalStore } = deps;
 
   const tryAutoAssign = (taskId: TaskId, taskType: TaskType) =>
     Effect.gen(function* () {
@@ -107,6 +110,29 @@ export function createOrchestratorReactor(deps: {
               yield* tryAutoAssign(task.id, task.taskType);
             }
           }
+          break;
+        }
+
+        case "meeting.task-proposed": {
+          // Ingest the proposal into the store so it appears in getPendingApproval().
+          // Idempotent — upsert by proposalId, so replaying the same event is a no-op.
+          yield* proposalStore.ingest(event.payload);
+          break;
+        }
+
+        case "meeting.completed": {
+          // All meeting.task-proposed events for this meeting have been ingested
+          // by the handlers above (they are emitted before meeting.completed in
+          // the same dispatch batch and delivered in order). Materialize a DAG
+          // task in "proposed" status for each proposal exactly once.
+          const proposals = yield* proposalStore.getByMeeting(event.payload.meetingId);
+          yield* materializeProposalTasksForMeeting({
+            engine,
+            meetingId: event.payload.meetingId,
+            proposals,
+            occurredAt: event.occurredAt,
+            logPrefix: `[${REACTOR_NAME}]`,
+          });
           break;
         }
 

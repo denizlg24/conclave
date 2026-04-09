@@ -151,7 +151,7 @@ describe("decider — proposed task approval flow", () => {
       }
     });
 
-    test("rejected proposed task transitions from proposed to failed", async () => {
+    test("rejected proposed task transitions from proposed to rejected", async () => {
       const meeting = makeMeeting({ id: makeMeetingId("rejection-mtg") });
       const rejectedTask = makeTask({
         id: makeTaskId("rejected-t"),
@@ -173,12 +173,12 @@ describe("decider — proposed task approval flow", () => {
       if (statusEvent?.type === "task.status-updated") {
         const payload = statusEvent.payload as { previousStatus: string; status: string; reason: string };
         expect(payload.previousStatus).toBe("proposed");
-        expect(payload.status).toBe("failed");
+        expect(payload.status).toBe("rejected");
         expect(payload.reason).toContain(meeting.id);
       }
     });
 
-    test("mixed approval emits pending for approved and failed for rejected in same batch", async () => {
+    test("mixed approval emits pending for approved and rejected for rejected in same batch", async () => {
       const meeting = makeMeeting({ id: makeMeetingId("mixed-mtg") });
       const taskApproved = makeTask({ id: makeTaskId("t-approve"), status: "proposed" });
       const taskRejected = makeTask({ id: makeTaskId("t-reject"), status: "proposed" });
@@ -208,7 +208,7 @@ describe("decider — proposed task approval flow", () => {
       const rejectedPayload = rejectedEvent?.payload as { status: string } | undefined;
 
       expect(approvedPayload?.status).toBe("pending");
-      expect(rejectedPayload?.status).toBe("failed");
+      expect(rejectedPayload?.status).toBe("rejected");
     });
 
     test("first event in batch is always meeting.tasks-approved", async () => {

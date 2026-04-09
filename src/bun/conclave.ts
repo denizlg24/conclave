@@ -10,7 +10,7 @@ import type {
   TaskType,
 } from "@/shared/types/orchestration";
 import { OrchestrationCommand as OrchestrationCommandSchema } from "@/shared/types/orchestration";
-import type { AgentId, CommandId, MeetingId, TaskId } from "@/shared/types/base-schemas";
+import type { AgentId, CommandId, MeetingId, ProposalId, TaskId } from "@/shared/types/base-schemas";
 
 import {
   createOrchestrationEngine,
@@ -23,6 +23,10 @@ import { createAgentReactor } from "@/core/communication/agent-reactor";
 import { createMeetingReactor } from "@/core/communication/meeting-reactor";
 import { createPlanningReactor } from "@/core/communication/planning-reactor";
 import { createReviewMeetingReactor } from "@/core/communication/review-meeting-reactor";
+import {
+  materializeProposalTasksForMeeting,
+  rejectLegacyDuplicateProposedTasks,
+} from "@/core/communication/proposal-task-materializer";
 import { createMeetingOrchestrator } from "@/core/meetings";
 import { createAgentService } from "@/core/agents/service";
 import { createClaudeCodeAdapter } from "@/core/agents/claude-code-adapter";
@@ -31,12 +35,21 @@ import { createAgentRuntimeEventStore } from "@/core/memory/agent-runtime-event-
 import { createPersistentEventStore } from "@/core/memory/persistent-event-store";
 import { createDecisionLogStore } from "@/core/memory/decision-log-store";
 import { createSuspensionStore } from "@/core/memory/suspension-store";
+import {
+  createMeetingTaskProposalStore,
+  type MeetingTaskProposalStoreShape,
+} from "@/core/memory/meeting-task-proposal-store";
 import { createResumeHandler } from "./resume-handler";
-import { DEFAULT_ADAPTER_TYPE, type AdapterType } from "@/shared/types/adapter";
+import {
+  DEFAULT_ADAPTER_TYPE,
+  defaultModelForAdapter,
+  type AdapterType,
+} from "@/shared/types/adapter";
 
 import type {
   SerializedAgentRoster,
   SerializedEvent,
+  SerializedPendingProposal,
   SerializedReadModel,
 } from "@/shared/rpc/rpc-schema";
 
@@ -70,6 +83,8 @@ function serializeReadModel(model: OrchestrationReadModel): SerializedReadModel 
       })),
       summary: m.summary,
       proposedTaskIds: [...m.proposedTaskIds],
+      approvedTaskIds: [...m.approvedTaskIds],
+      rejectedTaskIds: [...m.rejectedTaskIds],
       createdAt: m.createdAt,
       updatedAt: m.updatedAt,
     })),
@@ -121,6 +136,8 @@ export interface ConclaveShape {
     approvedTaskIds: string[];
     rejectedTaskIds: string[];
   }) => Promise<{ success: boolean }>;
+
+  readonly getPendingProposals: () => Promise<SerializedPendingProposal[]>;
 
   readonly scheduleMeeting: (params: {
     meetingType: string;
@@ -198,9 +215,17 @@ function decisionTypeForTask(taskType: TaskType):
   }
 }
 
+function getTaskInput(input: unknown): Record<string, unknown> | null {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+  return input as Record<string, unknown>;
+}
+
 export async function bootstrapConclave(
   projectPath: string,
   adapterType: AdapterType = DEFAULT_ADAPTER_TYPE,
+  model = defaultModelForAdapter(adapterType),
 ): Promise<ConclaveShape> {
   const scope = Effect.runSync(Scope.make());
   const memoryPath = join(projectPath, ".conclave", "memory");
@@ -214,8 +239,60 @@ export async function bootstrapConclave(
     const engine = yield* createOrchestrationEngine({ eventBus: bus, eventStore });
     const receiptStore = yield* createReceiptStore();
 
+    // Hydrate proposal store from persisted events.
+    const proposalStore: MeetingTaskProposalStoreShape = yield* createMeetingTaskProposalStore({ eventStore });
+    yield* proposalStore.rebuild();
+
+    // Re-link proposals to tasks that were already created in a previous session.
+    // Tasks created by the reactor embed their proposalId in input.proposalId.
+    // Any task no longer in "proposed" status means the human already decided —
+    // mark its proposal resolved so it no longer appears in the approval queue.
+    const bootReadModel = yield* engine.getReadModel();
+    for (const task of bootReadModel.tasks) {
+      const inp = getTaskInput(task.input);
+      if (
+        inp !== null &&
+        typeof inp["proposalId"] === "string" &&
+        task.status !== "proposed"
+      ) {
+        yield* proposalStore.markResolved(inp["proposalId"] as ProposalId, task.id);
+      }
+    }
+
+    // Recover pending proposal-backed tasks after restart, then reject the
+    // legacy meeting-reactor copies that never carried proposalId.
+    const pendingProposals = yield* proposalStore.getPendingApproval();
+    const pendingProposalsByMeeting = new Map<
+      MeetingId,
+      Array<(typeof pendingProposals)[number]>
+    >();
+    for (const proposal of pendingProposals) {
+      const existing = pendingProposalsByMeeting.get(proposal.meetingId);
+      if (existing) {
+        existing.push(proposal);
+      } else {
+        pendingProposalsByMeeting.set(proposal.meetingId, [proposal]);
+      }
+    }
+
+    for (const [meetingId, proposals] of pendingProposalsByMeeting) {
+      yield* materializeProposalTasksForMeeting({
+        engine,
+        meetingId,
+        proposals,
+        occurredAt: proposals[0]?.proposedAt ?? new Date().toISOString(),
+        logPrefix: "[bootstrap]",
+      });
+    }
+
+    yield* rejectLegacyDuplicateProposedTasks({
+      engine,
+      occurredAt: new Date().toISOString(),
+      logPrefix: "[bootstrap]",
+    });
+
     const adapter = yield* createAgentAdapter(adapterType);
-    const agentService = createAgentService(adapter);
+    const agentService = createAgentService(adapter, undefined, model);
 
     yield* agentService.startAgent(
       "agent-pm" as AgentId,
@@ -229,6 +306,7 @@ export async function bootstrapConclave(
       receiptStore,
       agentService,
       workingDirectory: projectPath,
+      proposalStore,
     }).pipe(Effect.provideService(Scope.Scope, scope));
 
     yield* createAgentReactor({
@@ -240,7 +318,6 @@ export async function bootstrapConclave(
     }).pipe(Effect.provideService(Scope.Scope, scope));
 
     yield* createMeetingReactor({
-      engine,
       bus,
       receiptStore,
     }).pipe(Effect.provideService(Scope.Scope, scope));
@@ -393,10 +470,10 @@ export async function bootstrapConclave(
       Effect.forkScoped,
     ).pipe(Effect.provideService(Scope.Scope, scope));
 
-    return { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks, agentRuntimeEventStore };
+    return { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks, agentRuntimeEventStore, proposalStore };
   });
 
-  const { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks, agentRuntimeEventStore } = await Effect.runPromise(program);
+  const { engine, bus, agentService, decisionLog, suspensionStore, eventCallbacks, agentEventCallbacks, rosterCallbacks, quotaExhaustedCallbacks, agentRuntimeEventStore, proposalStore } = await Effect.runPromise(program);
 
   const existingDecisions = await Effect.runPromise(decisionLog.getAll());
   const existingAgentEvents = await Effect.runPromise(agentRuntimeEventStore.readAll());
@@ -534,6 +611,36 @@ export async function bootstrapConclave(
         createdAt: new Date().toISOString(),
       })),
     );
+
+    // Mark proposals resolved so they leave the approval queue.
+    // The task embeds its proposalId in input.proposalId — use that to find
+    // the link without a separate index. Idempotent: markResolved is a no-op
+    // if the proposal was already resolved.
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const allDecidedTaskIds = [
+          ...params.approvedTaskIds,
+          ...params.rejectedTaskIds,
+        ];
+        const model = yield* engine.getReadModel();
+        for (const taskId of allDecidedTaskIds) {
+          const task = model.tasks.find((t) => t.id === taskId);
+          if (!task) continue;
+          const inp = task.input as Record<string, unknown> | null;
+          if (
+            inp !== null &&
+            typeof inp === "object" &&
+            typeof inp["proposalId"] === "string"
+          ) {
+            yield* proposalStore.markResolved(
+              inp["proposalId"] as ProposalId,
+              taskId,
+            );
+          }
+        }
+      }),
+    );
+
     return { success: true };
   };
 
@@ -575,6 +682,40 @@ export async function bootstrapConclave(
       reason: s.reason,
       taskTitle: s.executionContext.taskTitle,
     }));
+  };
+
+  const getPendingProposals = async (): Promise<SerializedPendingProposal[]> => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const pending = yield* proposalStore.getPendingApproval();
+        const model = yield* engine.getReadModel();
+
+        return pending.map((proposal): SerializedPendingProposal => {
+          // Find the DAG task whose input carries this proposal's id.
+          const task = model.tasks.find((t) => {
+            const inp = t.input as Record<string, unknown> | null;
+            return (
+              inp !== null &&
+              typeof inp === "object" &&
+              inp["proposalId"] === proposal.proposalId
+            );
+          });
+
+          return {
+            proposalId: proposal.proposalId,
+            meetingId: proposal.meetingId,
+            taskId: task?.id ?? "",
+            taskType: proposal.proposedTask.taskType,
+            title: proposal.proposedTask.title,
+            description: proposal.proposedTask.description,
+            deps: task ? [...task.deps] : [],
+            requiresApproval: proposal.requiresApproval,
+            proposedAt: proposal.proposedAt,
+            originatingAgentRole: proposal.originatingAgentRole,
+          };
+        });
+      }),
+    );
   };
 
   const { resumeSuspendedTask, retryTask } = createResumeHandler({
@@ -634,6 +775,7 @@ export async function bootstrapConclave(
     createTask,
     updateTaskStatus,
     approveProposedTasks,
+    getPendingProposals,
     scheduleMeeting,
     getSuspendedTasks,
     resumeSuspendedTask,

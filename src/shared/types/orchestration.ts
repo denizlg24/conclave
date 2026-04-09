@@ -7,6 +7,7 @@ import {
   IsoDateTime,
   MeetingId,
   NonNegativeInt,
+  ProposalId,
   TaskId,
   TrimmedNonEmptyString,
 } from "./base-schemas";
@@ -196,6 +197,22 @@ const MeetingCancelCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Emitted by agents during a meeting to surface an individual task proposal.
+// schemaVersion: 1 — future schema changes must increment this and provide
+// a migration path in migrations/00N-*.ts before deserialising older records.
+const MeetingProposeTaskCommand = Schema.Struct({
+  type: Schema.Literal("meeting.propose-task"),
+  schemaVersion: Schema.Literal(1),
+  commandId: CommandId,
+  meetingId: MeetingId,
+  proposalId: ProposalId,
+  agendaItemIndex: NonNegativeInt,
+  proposedTask: MeetingProposedTask,
+  originatingAgentRole: AgentRole,
+  requiresApproval: Schema.Boolean,
+  createdAt: IsoDateTime,
+});
+
 export const OrchestrationCommand = Schema.Union([
   TaskCreateCommand,
   TaskAssignCommand,
@@ -208,6 +225,7 @@ export const OrchestrationCommand = Schema.Union([
   MeetingContributeCommand,
   MeetingCompleteCommand,
   MeetingCancelCommand,
+  MeetingProposeTaskCommand,
 ]);
 export type OrchestrationCommand = typeof OrchestrationCommand.Type;
 
@@ -320,6 +338,21 @@ export const MeetingCancelledPayload = Schema.Struct({
   cancelledAt: IsoDateTime,
 });
 
+// Payload for a single task proposal originating from a meeting.
+// Each proposal is an immutable, individually addressable event in the store.
+// requiresApproval: always true for MVP — human gates all meeting-derived tasks
+// before they enter the DAG. Relax only after confidence metrics warrant it.
+export const MeetingTaskProposedPayload = Schema.Struct({
+  proposalId: ProposalId,
+  meetingId: MeetingId,
+  agendaItemIndex: NonNegativeInt,
+  proposedTask: MeetingProposedTask,
+  originatingAgentRole: AgentRole,
+  requiresApproval: Schema.Boolean,
+  proposedAt: IsoDateTime,
+});
+export type MeetingTaskProposedPayload = typeof MeetingTaskProposedPayload.Type;
+
 // ---------------------------------------------------------------------------
 // Event types (discriminated union)
 // ---------------------------------------------------------------------------
@@ -336,6 +369,7 @@ export const OrchestrationEventType = Schema.Literals([
   "meeting.contribution-added",
   "meeting.completed",
   "meeting.cancelled",
+  "meeting.task-proposed",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -394,6 +428,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("meeting.cancelled"),
     payload: MeetingCancelledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("meeting.task-proposed"),
+    payload: MeetingTaskProposedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
