@@ -5,7 +5,11 @@ if (!process.env.HOME && process.env.USERPROFILE) {
 }
 
 import { BrowserView, BrowserWindow, Updater, Utils } from "electrobun/bun";
-import type { ConclaveRPCSchema, SerializedAgentEvent } from "../shared/rpc/rpc-schema";
+import type {
+  ConclaveRPCSchema,
+  SerializedAgentEvent,
+  SerializedDebugConsoleEntry,
+} from "../shared/rpc/rpc-schema";
 import { bootstrapConclave, type ConclaveShape } from "./conclave";
 import {
   createProjectManager,
@@ -14,9 +18,14 @@ import {
 import {
   ADAPTER_OPTIONS,
   DEFAULT_ADAPTER_TYPE,
+  createDefaultAdapterModelSelections,
+  defaultModelForAdapter,
+  isAdapterModel,
   isAdapterType,
   type AdapterType,
 } from "../shared/types/adapter";
+import { createDebugConsoleEntry } from "../shared/utils/debug-console";
+import type { DebugConsoleLevel } from "../shared/types/debug-console";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -41,37 +50,90 @@ const projectManager = createProjectManager();
 let conclave: ConclaveShape | null = null;
 let activeProject: ProjectMeta | null = null;
 let selectedAdapter: AdapterType = DEFAULT_ADAPTER_TYPE;
+let selectedModels = createDefaultAdapterModelSelections();
 // Lazy reference — set after BrowserWindow is created so push callbacks
 // always target the current webview, even after page refreshes.
 let getWebviewRpc: (() => ReturnType<typeof BrowserView.defineRPC<ConclaveRPCSchema>> | null) | null = null;
+const debugConsoleEntries: SerializedDebugConsoleEntry[] = [];
+const nativeConsole: Record<DebugConsoleLevel, typeof console.log> = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  debug: (console.debug ?? console.log).bind(console),
+};
+
+function recordDebugConsoleEntry(
+  level: DebugConsoleLevel,
+  args: readonly unknown[],
+): void {
+  const entry = createDebugConsoleEntry({
+    source: "bun",
+    level,
+    args,
+  });
+
+  debugConsoleEntries.push(entry);
+  if (debugConsoleEntries.length > 400) {
+    debugConsoleEntries.splice(0, debugConsoleEntries.length - 400);
+  }
+
+  sendToWebview("onDebugConsoleEntry", entry);
+}
+
+function installConsoleMirror(): void {
+  (["log", "info", "warn", "error", "debug"] as const).forEach((level) => {
+    const original = nativeConsole[level];
+    console[level] = (...args: unknown[]) => {
+      original(...args);
+      recordDebugConsoleEntry(level, args);
+    };
+  });
+}
 
 function sendToWebview(
-  method: "onStateChanged" | "onEvent" | "onProjectLoaded" | "onAgentEvent" | "onAgentRoster" | "onQuotaExhausted",
+  method:
+    | "onStateChanged"
+    | "onEvent"
+    | "onProjectLoaded"
+    | "onAgentEvent"
+    | "onAgentRoster"
+    | "onDebugConsoleEntry"
+    | "onQuotaExhausted",
   data: unknown,
 ): void {
   const rpc = getWebviewRpc?.();
   if (!rpc) return;
-  switch (method) {
-    case "onStateChanged":
-      rpc.send.onStateChanged(data as Parameters<typeof rpc.send.onStateChanged>[0]);
-      break;
-    case "onEvent":
-      rpc.send.onEvent(data as Parameters<typeof rpc.send.onEvent>[0]);
-      break;
-    case "onProjectLoaded":
-      rpc.send.onProjectLoaded(data as Parameters<typeof rpc.send.onProjectLoaded>[0]);
-      break;
-    case "onAgentEvent":
-      rpc.send.onAgentEvent(data as Parameters<typeof rpc.send.onAgentEvent>[0]);
-      break;
-    case "onAgentRoster":
-      rpc.send.onAgentRoster(data as Parameters<typeof rpc.send.onAgentRoster>[0]);
-      break;
-    case "onQuotaExhausted":
-      rpc.send.onQuotaExhausted(data as Parameters<typeof rpc.send.onQuotaExhausted>[0]);
-      break;
+  try {
+    switch (method) {
+      case "onStateChanged":
+        rpc.send.onStateChanged(data as Parameters<typeof rpc.send.onStateChanged>[0]);
+        break;
+      case "onEvent":
+        rpc.send.onEvent(data as Parameters<typeof rpc.send.onEvent>[0]);
+        break;
+      case "onProjectLoaded":
+        rpc.send.onProjectLoaded(data as Parameters<typeof rpc.send.onProjectLoaded>[0]);
+        break;
+      case "onAgentEvent":
+        rpc.send.onAgentEvent(data as Parameters<typeof rpc.send.onAgentEvent>[0]);
+        break;
+      case "onAgentRoster":
+        rpc.send.onAgentRoster(data as Parameters<typeof rpc.send.onAgentRoster>[0]);
+        break;
+      case "onDebugConsoleEntry":
+        rpc.send.onDebugConsoleEntry(data as Parameters<typeof rpc.send.onDebugConsoleEntry>[0]);
+        break;
+      case "onQuotaExhausted":
+        rpc.send.onQuotaExhausted(data as Parameters<typeof rpc.send.onQuotaExhausted>[0]);
+        break;
+    }
+  } catch {
+    return;
   }
 }
+
+installConsoleMirror();
 
 function serializeAgentEvent(event: {
   type: string;
@@ -108,7 +170,11 @@ async function loadProjectAndBootstrap(
   activeProject = project;
 
   console.log(`Loading project: ${project.name} (${project.path})`);
-  conclave = await bootstrapConclave(project.path, selectedAdapter);
+  conclave = await bootstrapConclave(
+    project.path,
+    selectedAdapter,
+    selectedModels[selectedAdapter] ?? defaultModelForAdapter(selectedAdapter),
+  );
   console.log("Conclave orchestration system initialized.");
 
   conclave.onEvent((event, model) => {
@@ -131,6 +197,7 @@ async function loadProjectAndBootstrap(
   const initialRoster = await conclave.getAgentRoster();
   sendToWebview("onAgentRoster", initialRoster);
 
+  await forceMainWindowRelayout();
   sendToWebview("onProjectLoaded", project);
 }
 
@@ -175,6 +242,7 @@ const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
         return Promise.resolve({
           selectedAdapter,
           availableAdapters: [...ADAPTER_OPTIONS],
+          selectedModels: { ...selectedModels },
         });
       },
       setAdapter: ({ adapterType }) => {
@@ -185,8 +253,29 @@ const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
         return Promise.resolve({
           selectedAdapter,
           availableAdapters: [...ADAPTER_OPTIONS],
+          selectedModels: { ...selectedModels },
         });
       },
+      setAdapterModel: ({ adapterType, model }) => {
+        if (!isAdapterType(adapterType)) {
+          throw new Error(`Unsupported adapter '${adapterType}'`);
+        }
+        if (!isAdapterModel(adapterType, model)) {
+          throw new Error(
+            `Unsupported model '${model}' for adapter '${adapterType}'`,
+          );
+        }
+        selectedModels = {
+          ...selectedModels,
+          [adapterType]: model,
+        };
+        return Promise.resolve({
+          selectedAdapter,
+          availableAdapters: [...ADAPTER_OPTIONS],
+          selectedModels: { ...selectedModels },
+        });
+      },
+      getDebugConsoleEntries: () => Promise.resolve([...debugConsoleEntries]),
       getAgentRoster: () => {
         if (!conclave) throw new Error("No project loaded");
         return conclave.getAgentRoster();
@@ -234,6 +323,10 @@ const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
         if (!conclave) throw new Error("No project loaded");
         return conclave.retryTask(taskId);
       },
+      getPendingProposals: () => {
+        if (!conclave) throw new Error("No project loaded");
+        return conclave.getPendingProposals();
+      },
       deleteProject: ({ projectId }) => {
         projectManager.deleteProject(projectId);
         return Promise.resolve({ success: true });
@@ -265,5 +358,27 @@ const mainWindow = new BrowserWindow({
 
 // Wire up the lazy RPC getter now that mainWindow exists
 getWebviewRpc = () => mainWindow.webview.rpc ?? null;
+
+async function forceMainWindowRelayout(): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const frame = mainWindow.getFrame();
+  const nudgedWidth = frame.width + 1;
+  const nudgedHeight = frame.height + 1;
+
+  mainWindow.setFrame(frame.x, frame.y, nudgedWidth, nudgedHeight);
+  await Bun.sleep(16);
+  mainWindow.setFrame(frame.x, frame.y, frame.width, frame.height);
+  await Bun.sleep(16);
+
+  mainWindow.webview.executeJavascript(`
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+      window.visualViewport?.dispatchEvent?.(new Event("resize"));
+    });
+  `);
+}
 
 console.log("Conclave started! Waiting for project selection...");

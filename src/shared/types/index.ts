@@ -4,6 +4,7 @@ export {
   MeetingId,
   EventId,
   CommandId,
+  ProposalId,
   IsoDateTime,
   TrimmedString,
   TrimmedNonEmptyString,
@@ -15,10 +16,25 @@ export {
   ADAPTER_TYPES,
   ADAPTER_OPTIONS,
   DEFAULT_ADAPTER_TYPE,
+  createDefaultAdapterModelSelections,
+  defaultModelForAdapter,
+  getAdapterModels,
+  isAdapterModel,
   isAdapterType,
+  type AdapterModelOption,
+  type AdapterModelSelections,
   type AdapterOption,
   type AdapterType,
 } from "./adapter";
+
+export {
+  DEBUG_CONSOLE_LEVELS,
+  DEBUG_CONSOLE_SOURCES,
+  MAX_DEBUG_CONSOLE_ENTRIES,
+  type DebugConsoleEntry,
+  type DebugConsoleLevel,
+  type DebugConsoleSource,
+} from "./debug-console";
 
 export {
   TaskStatus,
@@ -45,6 +61,9 @@ export {
   MeetingStartedPayload,
   MeetingContributionAddedPayload,
   MeetingCompletedPayload,
+  MeetingTaskProposedPayload,
+  MeetingProposedTask,
+  MeetingTaskDependencyRef,
 } from "./orchestration";
 
 export type { BusEvent } from "./bus-event";

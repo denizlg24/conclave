@@ -186,7 +186,23 @@ describe("createAgentService", () => {
         service.startAgent(agentId, "developer", "/tmp/test"),
       );
 
-      expect(session.config.model).toBe("gpt-5-codex");
+      expect(session.config.model).toBe("gpt-5.4");
+    });
+
+    test("uses an explicit default model override when provided", async () => {
+      const adapter = createMockAdapter();
+      const service = createAgentService(
+        adapter,
+        undefined,
+        "opus",
+      );
+      const agentId = makeAgentId("custom-model-agent");
+
+      const session = await Effect.runPromise(
+        service.startAgent(agentId, "developer", "/tmp/test"),
+      );
+
+      expect(session.config.model).toBe("opus");
     });
 
     test("applies role-specific default configuration for reviewer", async () => {

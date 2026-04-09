@@ -11,6 +11,8 @@ import { Electroview } from "electrobun/view";
 import {
   ADAPTER_OPTIONS,
   DEFAULT_ADAPTER_TYPE,
+  createDefaultAdapterModelSelections,
+  type AdapterModelSelections,
   type AdapterType,
 } from "../../shared/types/adapter";
 import type {
@@ -20,11 +22,17 @@ import type {
   SerializedAgentEvent,
   SerializedAgentInfo,
   SerializedAgentRoster,
+  SerializedDebugConsoleEntry,
   SerializedEvent,
   SerializedProject,
   SerializedReadModel,
   SerializedSuspendedTask,
 } from "../../shared/rpc/rpc-schema";
+import {
+  appendDebugConsoleEntry,
+  createDebugConsoleEntry,
+  mergeDebugConsoleEntries,
+} from "../../shared/utils/debug-console";
 
 type QuotaExhaustedInfo = {
   agentId: string;
@@ -38,12 +46,14 @@ interface ConclaveState {
   activeProject: SerializedProject | null;
   selectedAdapter: AdapterType;
   availableAdapters: SerializedAdapterOption[];
+  selectedModels: AdapterModelSelections;
   readModel: SerializedReadModel | null;
   events: SerializedEvent[];
   agentEvents: SerializedAgentEvent[];
   agentRoster: SerializedAgentInfo[];
   projects: SerializedProject[];
   suspendedTasks: SerializedSuspendedTask[];
+  debugConsoleEntries: SerializedDebugConsoleEntry[];
   quotaExhaustedInfo: QuotaExhaustedInfo | null;
   connected: boolean;
 }
@@ -55,6 +65,7 @@ interface ConclaveActions {
   browseForDirectory: () => Promise<string | null>;
   loadProject: (projectId: string) => Promise<void>;
   setSelectedAdapter: (adapterType: AdapterType) => Promise<void>;
+  setAdapterModel: (adapterType: AdapterType, model: string) => Promise<void>;
   sendCommand: (message: string) => Promise<{ taskId: string; meetingId: string }>;
   createTask: (params: {
     taskType: string;
@@ -98,6 +109,13 @@ interface RPCClient {
   getActiveProject: (params: Record<string, never>) => Promise<SerializedProject | null>;
   getAdapterState: (params: Record<string, never>) => Promise<SerializedAdapterState>;
   setAdapter: (params: { adapterType: AdapterType }) => Promise<SerializedAdapterState>;
+  setAdapterModel: (params: {
+    adapterType: AdapterType;
+    model: string;
+  }) => Promise<SerializedAdapterState>;
+  getDebugConsoleEntries: (
+    params: Record<string, never>,
+  ) => Promise<SerializedDebugConsoleEntry[]>;
   getAgentRoster: (params: Record<string, never>) => Promise<SerializedAgentRoster>;
   sendCommand: (params: { message: string }) => Promise<{ taskId: string; meetingId: string }>;
   getState: (params: Record<string, never>) => Promise<SerializedReadModel>;
@@ -134,12 +152,14 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     activeProject: null,
     selectedAdapter: DEFAULT_ADAPTER_TYPE,
     availableAdapters: [...ADAPTER_OPTIONS],
+    selectedModels: createDefaultAdapterModelSelections(),
     readModel: null,
     events: [],
     agentEvents: [],
     agentRoster: [],
     projects: [],
     suspendedTasks: [],
+    debugConsoleEntries: [],
     quotaExhaustedInfo: null,
     connected: false,
   });
@@ -182,6 +202,15 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
               agentRoster: roster.agents,
             }));
           },
+          onDebugConsoleEntry: (entry) => {
+            setState((prev) => ({
+              ...prev,
+              debugConsoleEntries: appendDebugConsoleEntry(
+                prev.debugConsoleEntries,
+                entry,
+              ),
+            }));
+          },
           onQuotaExhausted: (info) => {
             setState((prev) => ({
               ...prev,
@@ -200,10 +229,11 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     const init = async (retries = 3, delayMs = 500) => {
       for (let i = 0; i < retries; i++) {
         try {
-          const [activeProject, projects, adapterState] = await Promise.all([
+          const [activeProject, projects, adapterState, debugConsoleEntries] = await Promise.all([
             client.getActiveProject({} as Record<string, never>),
             client.listProjects({} as Record<string, never>),
             client.getAdapterState({} as Record<string, never>),
+            client.getDebugConsoleEntries({} as Record<string, never>),
           ]);
 
           if (activeProject) {
@@ -218,11 +248,16 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
               activeProject,
               selectedAdapter: adapterState.selectedAdapter,
               availableAdapters: adapterState.availableAdapters,
+              selectedModels: adapterState.selectedModels,
               readModel: model,
               events,
               agentRoster: roster.agents,
               suspendedTasks,
               projects,
+              debugConsoleEntries: mergeDebugConsoleEntries(
+                prev.debugConsoleEntries,
+                debugConsoleEntries,
+              ),
               connected: true,
             }));
           } else {
@@ -230,7 +265,12 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
               ...prev,
               selectedAdapter: adapterState.selectedAdapter,
               availableAdapters: adapterState.availableAdapters,
+              selectedModels: adapterState.selectedModels,
               projects,
+              debugConsoleEntries: mergeDebugConsoleEntries(
+                prev.debugConsoleEntries,
+                debugConsoleEntries,
+              ),
               connected: true,
             }));
           }
@@ -244,6 +284,42 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
       setState((prev) => ({ ...prev, connected: true }));
     };
     init();
+  }, []);
+
+  useEffect(() => {
+    const originals = {
+      log: console.log.bind(console),
+      info: console.info.bind(console),
+      warn: console.warn.bind(console),
+      error: console.error.bind(console),
+      debug: (console.debug ?? console.log).bind(console),
+    };
+
+    (["log", "info", "warn", "error", "debug"] as const).forEach((level) => {
+      console[level] = (...args: unknown[]) => {
+        originals[level](...args);
+        const entry = createDebugConsoleEntry({
+          source: "webview",
+          level,
+          args,
+        });
+        setState((prev) => ({
+          ...prev,
+          debugConsoleEntries: appendDebugConsoleEntry(
+            prev.debugConsoleEntries,
+            entry,
+          ),
+        }));
+      };
+    });
+
+    return () => {
+      console.log = originals.log;
+      console.info = originals.info;
+      console.warn = originals.warn;
+      console.error = originals.error;
+      console.debug = originals.debug;
+    };
   }, []);
 
   const refresh = useCallback(async () => {
@@ -293,18 +369,11 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     const client = rpcClientRef.current;
     if (!client) throw new Error("Not connected");
     await client.loadProject({ projectId });
-    const [model, events, suspendedTasks] = await Promise.all([
-      client.getState({} as Record<string, never>),
-      client.getEvents({ fromSequence: 0 }),
-      client.getSuspendedTasks({} as Record<string, never>),
-    ]);
-    setState((prev) => ({
-      ...prev,
-      readModel: model,
-      events,
-      agentEvents: [],
-      suspendedTasks,
-    }));
+
+    // A full document reload takes the same path as the manual workaround
+    // the user reported: after refresh, the Electrobun/WebView layout is
+    // correct on first paint and the active project is rehydrated from Bun.
+    window.location.reload();
   }, []);
 
   const setSelectedAdapter = useCallback(async (adapterType: AdapterType) => {
@@ -315,8 +384,24 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
       ...prev,
       selectedAdapter: adapterState.selectedAdapter,
       availableAdapters: adapterState.availableAdapters,
+      selectedModels: adapterState.selectedModels,
     }));
   }, []);
+
+  const setAdapterModel = useCallback(
+    async (adapterType: AdapterType, model: string) => {
+      const client = rpcClientRef.current;
+      if (!client) throw new Error("Not connected");
+      const adapterState = await client.setAdapterModel({ adapterType, model });
+      setState((prev) => ({
+        ...prev,
+        selectedAdapter: adapterState.selectedAdapter,
+        availableAdapters: adapterState.availableAdapters,
+        selectedModels: adapterState.selectedModels,
+      }));
+    },
+    [],
+  );
 
   const sendCommand = useCallback(async (message: string) => {
     const client = rpcClientRef.current;
@@ -430,6 +515,7 @@ export function ConclaveProvider({ children }: { children: ReactNode }) {
     browseForDirectory,
     loadProject,
     setSelectedAdapter,
+    setAdapterModel,
     sendCommand,
     createTask,
     updateTaskStatus,

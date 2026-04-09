@@ -1,6 +1,6 @@
 import { Effect, Stream } from "effect";
 
-import type { AdapterType } from "@/shared/types/adapter";
+import { defaultModelForAdapter } from "@/shared/types/adapter";
 import type { AgentId, TaskId } from "@/shared/types/base-schemas";
 import type {
   AgentRoleConfig,
@@ -11,15 +11,6 @@ import type { AgentRole } from "@/shared/types/orchestration";
 import type { AgentAdapterShape, AgentSession } from "./adapter";
 import { AgentAdapterError } from "./errors";
 import type { AgentError } from "./errors";
-
-const defaultModelForAdapter = (adapterType: AdapterType): string => {
-  switch (adapterType) {
-    case "claude-code":
-      return "claude-sonnet-4-6";
-    case "openai-codex":
-      return "gpt-5-codex";
-  }
-};
 
 const DEFAULT_ROLE_CONFIGS: Record<
   string,
@@ -181,6 +172,7 @@ export interface AgentServiceShape {
 export function createAgentService(
   adapter: AgentAdapterShape,
   poolConfig: AgentPoolConfig = DEFAULT_POOL_CONFIG,
+  defaultModel = defaultModelForAdapter(adapter.adapterType),
 ): AgentServiceShape {
   const busyAgents = new Set<AgentId>();
   const roleCounters = new Map<AgentRole, number>();
@@ -215,7 +207,7 @@ export function createAgentService(
 
       const config: AgentRoleConfig = {
         ...defaults,
-        model: defaultModelForAdapter(adapter.adapterType),
+        model: defaultModel,
         workingDirectory,
         ...configOverrides,
         role,
