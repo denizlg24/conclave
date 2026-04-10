@@ -1,9 +1,33 @@
-import { useState } from "react";
-import { useConclave } from "../hooks/use-conclave";
+import { useState, type ReactNode } from "react";
 import {
-  ADAPTER_OPTIONS,
-  type AdapterType,
-} from "../../shared/types/adapter";
+  ArrowLeft,
+  FolderOpen,
+  LoaderCircle,
+  Plus,
+  Settings,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
+import { useConclave } from "../hooks/use-conclave";
+import { ADAPTER_OPTIONS } from "../../shared/types/adapter";
+import { SettingsPanel } from "./settings/SettingsPanel";
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function connectionLabel(state: string): string {
+  switch (state) {
+    case "connected":
+      return "Ready";
+    case "failed":
+      return "Attention";
+    case "not_configured":
+      return "Configure";
+    default:
+      return "Unknown";
+  }
+}
 
 export function ProjectScreen() {
   const {
@@ -11,12 +35,16 @@ export function ProjectScreen() {
     selectedAdapter,
     availableAdapters,
     selectedModels,
+    appSettings,
+    appSettingsLoading,
+    appSettingsError,
     createProject,
     openDirectory,
     browseForDirectory,
     loadProject,
-    setSelectedAdapter,
-    setAdapterModel,
+    refreshAppSettings,
+    updateAppSettings,
+    testAdapterConnection,
     deleteProject,
   } = useConclave();
   const [showNewForm, setShowNewForm] = useState(false);
@@ -24,28 +52,32 @@ export function ProjectScreen() {
   const [newDescription, setNewDescription] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
-  const [adapterLoading, setAdapterLoading] = useState<AdapterType | null>(null);
-  const [modelLoading, setModelLoading] = useState<AdapterType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [page, setPage] = useState<"home" | "settings">("home");
 
   const adapterOptions =
     availableAdapters.length > 0 ? availableAdapters : ADAPTER_OPTIONS;
+  const activeProviderType = appSettings?.provider ?? selectedAdapter;
   const activeAdapter =
-    adapterOptions.find((adapter) => adapter.type === selectedAdapter) ??
+    adapterOptions.find((adapter) => adapter.type === activeProviderType) ??
     adapterOptions[0];
   const activeModel =
-    activeAdapter
+    appSettings?.model ??
+    (activeAdapter
       ? selectedModels[activeAdapter.type] ?? activeAdapter.defaultModel
-      : "";
+      : "");
+  const settingsBusy = loading !== null || deletingId !== null;
 
   const handleBrowse = async () => {
     setError(null);
     try {
       const path = await browseForDirectory();
-      if (path) setSelectedPath(path);
+      if (path) {
+        setSelectedPath(path);
+      }
     } catch (err) {
-      setError(String(err));
+      setError(toErrorMessage(err));
     }
   };
 
@@ -53,12 +85,14 @@ export function ProjectScreen() {
     setError(null);
     try {
       const path = await browseForDirectory();
-      if (!path) return;
+      if (!path) {
+        return;
+      }
       setLoading("open");
       const project = await openDirectory(path);
       await loadProject(project.id);
     } catch (err) {
-      setError(String(err));
+      setError(toErrorMessage(err));
       setLoading(null);
     }
   };
@@ -66,7 +100,10 @@ export function ProjectScreen() {
   const handleCreate = async () => {
     const name = newName.trim();
     const description = newDescription.trim();
-    if (!name || !description || !selectedPath) return;
+    if (!name || !description || !selectedPath) {
+      return;
+    }
+
     setError(null);
     try {
       const project = await createProject(name, description, selectedPath);
@@ -76,7 +113,7 @@ export function ProjectScreen() {
       setLoading(project.id);
       await loadProject(project.id);
     } catch (err) {
-      setError(String(err));
+      setError(toErrorMessage(err));
       setLoading(null);
     }
   };
@@ -87,51 +124,18 @@ export function ProjectScreen() {
     try {
       await loadProject(id);
     } catch (err) {
-      setError(String(err));
+      setError(toErrorMessage(err));
       setLoading(null);
     }
   };
 
-  const handleAdapterSelect = async (adapterType: AdapterType) => {
-    if (adapterType === selectedAdapter || loading !== null) return;
-
+  const handleDelete = async (projectId: string) => {
     setError(null);
-    setAdapterLoading(adapterType);
     try {
-      await setSelectedAdapter(adapterType);
+      await deleteProject(projectId);
+      setDeletingId(null);
     } catch (err) {
-      setError(String(err));
-    } finally {
-      setAdapterLoading(null);
-    }
-  };
-
-  const handleAdapterModelChange = async (
-    adapterType: AdapterType,
-    model: string,
-  ) => {
-    const adapter = adapterOptions.find((option) => option.type === adapterType);
-    const currentModel = adapter
-      ? selectedModels[adapterType] ?? adapter.defaultModel
-      : null;
-
-    if (
-      currentModel === model ||
-      loading !== null ||
-      adapterLoading !== null ||
-      modelLoading !== null
-    ) {
-      return;
-    }
-
-    setError(null);
-    setModelLoading(adapterType);
-    try {
-      await setAdapterModel(adapterType, model);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setModelLoading(null);
+      setError(toErrorMessage(err));
     }
   };
 
@@ -148,478 +152,287 @@ export function ProjectScreen() {
         height: "var(--app-height, 100%)",
       }}
     >
-      <div
-        className="absolute inset-8 pointer-events-none"
-        style={{ border: "1px solid rgba(58, 74, 53, 0.2)" }}
-      />
-      <div
-        className="absolute inset-10 pointer-events-none"
-        style={{ border: "1px solid rgba(58, 74, 53, 0.1)" }}
-      />
+      {page === "home" ? (
+        <div className="conclave-workspace-scroll">
+          <div className="conclave-workspace-content">
+            <header className="conclave-topline">
+              <div>
+                <div className="conclave-brandline">
+                  <ShieldCheck className="h-4 w-4" />
+                  <span>Conclave</span>
+                </div>
+                <h1 className="conclave-page-title">Projects</h1>
+                <p className="conclave-page-subtitle">
+                  Start a new workspace or continue an existing one.
+                </p>
+              </div>
 
-      <div className="w-[480px] flex flex-col items-center">
-        <div className="text-center mb-10">
-          <h1
-            className="rpg-font text-[28px] tracking-[0.3em]"
-            style={{ color: "var(--rpg-gold)" }}
-          >
-            CONCLAVE
-          </h1>
-          <p
-            className="rpg-mono text-[10px] mt-2 tracking-widest"
-            style={{ color: "var(--rpg-text-muted)" }}
-          >
-            MULTI-AGENT ORCHESTRATION PLATFORM
-          </p>
-          <div
-            className="mt-3 mx-auto"
-            style={{
-              width: 120,
-              height: 1,
-              background:
-                "linear-gradient(90deg, transparent, var(--rpg-gold-dim), transparent)",
-            }}
-          />
-        </div>
+              <div className="conclave-inline-meta">
+                <InlineMetric label="Projects" value={String(projects.length)} />
+                <InlineMetric label="Provider" value={activeAdapter?.label ?? "Unknown"} />
+                <InlineMetric
+                  label="Connection"
+                  value={connectionLabel(appSettings?.connectionStatus.state ?? "unknown")}
+                />
+              </div>
+            </header>
 
-        <div className="w-full rpg-panel overflow-hidden">
-          <div
-            className="px-5 py-4"
-            style={{ borderBottom: "1px solid var(--rpg-border)" }}
-          >
-            <span
-              className="rpg-font text-[9px] tracking-wider block mb-3"
-              style={{ color: "var(--rpg-gold-dim)" }}
-            >
-              AGENT ADAPTER
-            </span>
-            <div className="grid grid-cols-2 gap-2">
-              {adapterOptions.map((adapter) => {
-                const active = adapter.type === selectedAdapter;
-                const isBusy = adapterLoading === adapter.type;
-                const isModelBusy = modelLoading === adapter.type;
-                const selectedModel =
-                  selectedModels[adapter.type] ?? adapter.defaultModel;
-
-                return (
-                  <div
-                    key={adapter.type}
-                    className="px-3 py-3 transition-all"
-                    style={{
-                      background: active
-                        ? "rgba(200, 169, 110, 0.08)"
-                        : "rgba(255, 255, 255, 0.02)",
-                      border: active
-                        ? "1px solid var(--rpg-border-highlight)"
-                        : "1px solid var(--rpg-border)",
-                    }}
+            <section className="conclave-section">
+              <div className="conclave-section-head">
+                <div>
+                  <h2>Start work</h2>
+                  <p>New projects inherit the current provider and model settings.</p>
+                </div>
+                <div className="conclave-actions-row">
+                  <ActionButton
+                    onClick={() => setShowNewForm((current) => !current)}
+                    loading={false}
+                    active={showNewForm}
+                    icon={<Plus className="h-3.5 w-3.5" />}
                   >
+                    New project
+                  </ActionButton>
+                  <ActionButton
+                    onClick={handleOpenDirectory}
+                    loading={loading === "open"}
+                    icon={<FolderOpen className="h-3.5 w-3.5" />}
+                  >
+                    Open directory
+                  </ActionButton>
+                </div>
+              </div>
+
+              {showNewForm && (
+                <div className="conclave-form-grid">
+                  <label className="conclave-field-block">
+                    <span>Project name</span>
+                    <input
+                      type="text"
+                      value={newName}
+                      onChange={(event) => setNewName(event.target.value)}
+                      placeholder="Example: Approval queue hardening"
+                      className="conclave-input"
+                    />
+                  </label>
+
+                  <label className="conclave-field-block">
+                    <span>Working directory</span>
+                    <div className="conclave-row-input">
+                      <button
+                        onClick={handleBrowse}
+                        disabled={loading !== null}
+                        className="conclave-btn-secondary"
+                      >
+                        Select
+                      </button>
+                      <div className="conclave-readout-box flex-1 truncate">
+                        {selectedPath ?? "No directory selected"}
+                      </div>
+                    </div>
+                  </label>
+
+                  <label className="conclave-field-block conclave-field-block--full">
+                    <span>Objective</span>
+                    <textarea
+                      value={newDescription}
+                      onChange={(event) => setNewDescription(event.target.value)}
+                      placeholder="Describe project objective and constraints..."
+                      rows={4}
+                      className="conclave-input min-h-[112px] resize-none"
+                    />
+                  </label>
+
+                  <div className="conclave-form-footer">
+                    <p>
+                      Active route: {activeAdapter?.label ?? "Unknown provider"} on {activeModel}
+                    </p>
                     <button
-                      onClick={() => handleAdapterSelect(adapter.type)}
+                      onClick={handleCreate}
                       disabled={
-                        loading !== null ||
-                        adapterLoading !== null ||
-                        modelLoading !== null
+                        !newName.trim() ||
+                        !newDescription.trim() ||
+                        !selectedPath ||
+                        loading !== null
                       }
-                      className="w-full text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="conclave-btn-primary"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span
-                          className="rpg-mono text-[11px]"
-                          style={{
-                            color: active
-                              ? "var(--rpg-gold)"
-                              : "var(--rpg-text)",
-                          }}
-                        >
-                          {adapter.label}
-                        </span>
-                        <span
-                          className="rpg-mono text-[8px] uppercase tracking-wider"
-                          style={{ color: "var(--rpg-text-muted)" }}
-                        >
-                          {isBusy ? "..." : adapter.provider}
-                        </span>
-                      </div>
-                      <p
-                        className="rpg-mono text-[9px] mt-2 leading-relaxed"
-                        style={{ color: "var(--rpg-text-muted)" }}
-                      >
-                        {adapter.description}
-                      </p>
+                      {loading && loading !== "open" ? (
+                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Plus className="h-3.5 w-3.5" />
+                      )}
+                      Create project
                     </button>
-
-                    <div className="mt-3">
-                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                        <span
-                          className="rpg-mono text-[8px] uppercase tracking-wider"
-                          style={{ color: "var(--rpg-text-muted)" }}
-                        >
-                          Model
-                        </span>
-                        <span
-                          className="rpg-mono text-[8px] uppercase tracking-wider"
-                          style={{
-                            color: isModelBusy
-                              ? "var(--rpg-gold)"
-                              : "var(--rpg-text-muted)",
-                          }}
-                        >
-                          {isModelBusy ? "Saving" : active ? "Active" : "Stored"}
-                        </span>
-                      </div>
-                      <select
-                        value={selectedModel}
-                        disabled={
-                          loading !== null ||
-                          adapterLoading !== null ||
-                          modelLoading !== null
-                        }
-                        onChange={(e) =>
-                          handleAdapterModelChange(
-                            adapter.type,
-                            e.target.value,
-                          )
-                        }
-                        className="w-full rpg-mono text-[10px] px-2.5 py-2 outline-none disabled:opacity-40 disabled:cursor-not-allowed"
-                        style={{
-                          background: "rgba(12, 16, 12, 0.82)",
-                          border: "1px solid rgba(58, 74, 53, 0.65)",
-                          color: "var(--rpg-text)",
-                        }}
-                      >
-                        {adapter.models.map((model) => (
-                          <option key={model.value} value={model.value}>
-                            {model.label} · {model.description}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
                   </div>
-                );
-              })}
-            </div>
-            <p
-              className="rpg-mono text-[9px] mt-3 leading-relaxed"
-              style={{ color: "var(--rpg-text-muted)" }}
-            >
-              The next campaign will start with{" "}
-              {activeAdapter?.label ?? "the selected adapter"} on{" "}
-              <span style={{ color: "var(--rpg-text)" }}>{activeModel}</span>.
-            </p>
-          </div>
+                </div>
+              )}
+            </section>
 
-          <div
-            className="flex flex-col"
-            style={{ borderBottom: "1px solid var(--rpg-border)" }}
-          >
-            <MenuButton
-              onClick={() => setShowNewForm(!showNewForm)}
-              active={showNewForm}
-              loading={false}
-            >
-              NEW CAMPAIGN
-            </MenuButton>
-            <MenuButton
-              onClick={handleOpenDirectory}
-              loading={loading === "open"}
-            >
-              OPEN DIRECTORY
-            </MenuButton>
-          </div>
-
-          {showNewForm && (
-            <div
-              className="px-5 py-4 space-y-3"
-              style={{
-                borderBottom: "1px solid var(--rpg-border)",
-                background: "rgba(200, 169, 110, 0.03)",
-              }}
-            >
-              <input
-                type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Campaign name..."
-                className="w-full rpg-mono text-[11px] px-3 py-2 outline-none transition-colors"
-                style={{
-                  background: "rgba(255, 255, 255, 0.03)",
-                  border: "1px solid var(--rpg-border)",
-                  color: "var(--rpg-text)",
-                  caretColor: "var(--rpg-gold)",
-                }}
-                onFocus={(e) =>
-                  (e.currentTarget.style.borderColor =
-                    "var(--rpg-border-highlight)")
-                }
-                onBlur={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--rpg-border)")
-                }
-              />
-              <textarea
-                value={newDescription}
-                onChange={(e) => setNewDescription(e.target.value)}
-                placeholder="Describe the project objective..."
-                rows={3}
-                className="w-full rpg-mono text-[11px] px-3 py-2 outline-none resize-none transition-colors"
-                style={{
-                  background: "rgba(255, 255, 255, 0.03)",
-                  border: "1px solid var(--rpg-border)",
-                  color: "var(--rpg-text)",
-                  caretColor: "var(--rpg-gold)",
-                }}
-                onFocus={(e) =>
-                  (e.currentTarget.style.borderColor =
-                    "var(--rpg-border-highlight)")
-                }
-                onBlur={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--rpg-border)")
-                }
-              />
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleBrowse}
-                  disabled={loading !== null}
-                  className="rpg-action-btn shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  SELECT DIRECTORY
-                </button>
-                <span
-                  className="rpg-mono text-[10px] truncate min-w-0"
-                  style={{ color: "var(--rpg-text-dim)" }}
-                >
-                  {selectedPath ?? "No directory selected"}
-                </span>
+            <section className="conclave-section">
+              <div className="conclave-section-head">
+                <div>
+                  <h2>Project registry</h2>
+                  <p>Load an existing workspace or remove stale entries.</p>
+                </div>
               </div>
-              <button
-                onClick={handleCreate}
-                disabled={
-                  !newName.trim() ||
-                  !newDescription.trim() ||
-                  !selectedPath ||
-                  loading !== null
-                }
-                className="w-full rpg-action-btn primary-action justify-center disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{ padding: "8px 16px" }}
-              >
-                BEGIN CAMPAIGN
-              </button>
-            </div>
-          )}
 
-          <div className="px-5 py-4">
-            <span
-              className="rpg-font text-[9px] tracking-wider block mb-3"
-              style={{ color: "var(--rpg-gold-dim)" }}
-            >
-              {projects.length > 0 ? "CONTINUE CAMPAIGN" : "NO CAMPAIGNS"}
-            </span>
-            {projects.length === 0 ? (
-              <p
-                className="rpg-mono text-[10px] text-center py-4"
-                style={{ color: "var(--rpg-text-muted)" }}
-              >
-                Begin a new campaign to get started
-              </p>
-            ) : (
-              <div className="space-y-1 max-h-[240px] overflow-y-auto overflow-x-hidden">
-                {projects.map((p) => (
-                  <div key={p.id}>
-                    <div
-                      className="flex items-center min-w-0"
-                      style={{ border: "1px solid var(--rpg-border)" }}
-                    >
-                      <button
-                        onClick={() => handleLoad(p.id)}
-                        disabled={loading !== null || deletingId === p.id}
-                        className="flex-1 flex items-center gap-3 px-3 py-2.5 text-left cursor-pointer disabled:opacity-30 transition-all"
-                        style={{ background: "transparent" }}
-                        onMouseEnter={(e) => {
-                          if (deletingId !== p.id) {
-                            e.currentTarget.style.background =
-                              "rgba(200, 169, 110, 0.05)";
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "transparent";
-                        }}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div
-                            className="rpg-mono text-[11px] truncate"
-                            style={{ color: "var(--rpg-text)" }}
+              <div className="conclave-list">
+                {projects.length === 0 ? (
+                  <div className="conclave-empty-state">
+                    No projects yet. Create one or open a directory to begin.
+                  </div>
+                ) : (
+                  projects.map((project) => {
+                    const isLoading = loading === project.id;
+                    const isDeleting = deletingId === project.id;
+
+                    return (
+                      <article key={project.id} className="conclave-list-item">
+                        <div className="conclave-list-item__main">
+                          <button
+                            onClick={() => handleLoad(project.id)}
+                            disabled={loading !== null || deletingId === project.id}
+                            className="conclave-list-item__open"
                           >
-                            {p.name}
-                          </div>
-                          <div
-                            className="rpg-mono text-[9px] truncate mt-0.5"
-                            style={{ color: "var(--rpg-text-muted)" }}
+                            <div className="conclave-list-item__title-row">
+                              <h3>{project.name}</h3>
+                              <span>{new Date(project.createdAt).toLocaleDateString()}</span>
+                            </div>
+                            <p>{project.description}</p>
+                            <code>{project.path}</code>
+                          </button>
+
+                          <button
+                            onClick={() => setDeletingId(project.id)}
+                            disabled={loading !== null || deletingId !== null}
+                            className="conclave-btn-danger"
                           >
-                            {p.path}
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Remove
+                          </button>
+                        </div>
+
+                        {isLoading && (
+                          <div className="conclave-list-item__status">
+                            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                            Opening workspace...
                           </div>
-                        </div>
-                        <div
-                          className="rpg-mono text-[9px] shrink-0"
-                          style={{ color: "var(--rpg-text-muted)" }}
-                        >
-                          {new Date(p.createdAt).toLocaleDateString()}
-                        </div>
-                        {loading === p.id && (
-                          <div
-                            className="w-3 h-3 border border-t-transparent rounded-full animate-spin shrink-0"
-                            style={{
-                              borderColor: "var(--rpg-gold-dim)",
-                              borderTopColor: "transparent",
-                            }}
-                          />
                         )}
-                      </button>
-                      <button
-                        onClick={() => setDeletingId(p.id)}
-                        disabled={loading !== null || deletingId !== null}
-                        className="rpg-mono text-[10px] px-2 py-1 mx-2 shrink-0 cursor-pointer transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                        style={{
-                          background: "rgba(196, 92, 74, 0.1)",
-                          border: "1px solid rgba(196, 92, 74, 0.3)",
-                          color: "var(--rpg-text-muted)",
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background =
-                            "rgba(196, 92, 74, 0.2)";
-                          e.currentTarget.style.borderColor =
-                            "rgba(196, 92, 74, 0.6)";
-                          e.currentTarget.style.color = "#c45c4a";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background =
-                            "rgba(196, 92, 74, 0.1)";
-                          e.currentTarget.style.borderColor =
-                            "rgba(196, 92, 74, 0.3)";
-                          e.currentTarget.style.color =
-                            "var(--rpg-text-muted)";
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                    {deletingId === p.id && (
-                      <div
-                        className="flex items-center gap-2 px-3 py-2"
-                        style={{
-                          background: "rgba(196, 92, 74, 0.08)",
-                          border: "1px solid rgba(196, 92, 74, 0.3)",
-                          borderTop: "none",
-                        }}
-                      >
-                        <span
-                          className="rpg-mono text-[10px] flex-1"
-                          style={{ color: "#c45c4a" }}
-                        >
-                          REMOVE FROM LIST?
-                        </span>
-                        <button
-                          onClick={async () => {
-                            await deleteProject(p.id);
-                            setDeletingId(null);
-                          }}
-                          className="rpg-mono text-[10px] px-2 py-0.5 cursor-pointer transition-all"
-                          style={{
-                            background: "rgba(196, 92, 74, 0.2)",
-                            border: "1px solid rgba(196, 92, 74, 0.5)",
-                            color: "#c45c4a",
-                          }}
-                        >
-                          CONFIRM
-                        </button>
-                        <button
-                          onClick={() => setDeletingId(null)}
-                          className="rpg-mono text-[10px] px-2 py-0.5 cursor-pointer transition-all"
-                          style={{
-                            background: "transparent",
-                            border: "1px solid var(--rpg-border)",
-                            color: "var(--rpg-text-muted)",
-                          }}
-                        >
-                          CANCEL
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
+
+                        {isDeleting && (
+                          <div className="conclave-list-item__confirm">
+                            <p>Remove this project from local registry (files remain on disk).</p>
+                            <div className="conclave-actions-row">
+                              <button
+                                onClick={() => handleDelete(project.id)}
+                                className="conclave-btn-danger"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                onClick={() => setDeletingId(null)}
+                                className="conclave-btn-secondary"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })
+                )}
               </div>
-            )}
+            </section>
+
+            <footer className="conclave-footer-row">
+              <span>v0.1.0</span>
+              {error && <div className="conclave-inline-error">{error}</div>}
+            </footer>
           </div>
-
-          {error && (
-            <div
-              className="px-5 py-2"
-              style={{ borderTop: "1px solid var(--rpg-danger-dim)" }}
-            >
-              <p
-                className="rpg-mono text-[10px]"
-                style={{ color: "var(--rpg-danger)" }}
-              >
-                {error}
-              </p>
-            </div>
-          )}
         </div>
+      ) : (
+        <div className="conclave-workspace-scroll">
+          <div className="conclave-workspace-content">
+            <header className="conclave-topline">
+              <div className="conclave-settings-head-row">
+                <button
+                  type="button"
+                  onClick={() => setPage("home")}
+                  className="conclave-btn-secondary"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Back
+                </button>
+                <div>
+                  <h1 className="conclave-page-title conclave-page-title--compact">Settings</h1>
+                  <p className="conclave-page-subtitle">
+                    Configure provider, model, and adapter binary route.
+                  </p>
+                </div>
+              </div>
+            </header>
 
-        <span
-          className="rpg-mono text-[8px] mt-6"
-          style={{ color: "var(--rpg-text-muted)" }}
+            <SettingsPanel
+              adapterOptions={adapterOptions}
+              appSettings={appSettings}
+              appSettingsLoading={appSettingsLoading}
+              appSettingsError={appSettingsError}
+              busy={settingsBusy}
+              onRefresh={refreshAppSettings}
+              onSave={updateAppSettings}
+              onTest={testAdapterConnection}
+            />
+
+            {error && <div className="conclave-inline-error">{error}</div>}
+          </div>
+        </div>
+      )}
+
+      {page === "home" && (
+        <button
+          type="button"
+          aria-label="Open settings"
+          onClick={() => setPage("settings")}
+          className="conclave-corner-button"
         >
-          v0.1.0
-        </span>
-      </div>
+          <Settings className="h-4 w-4" />
+        </button>
+      )}
     </main>
   );
 }
 
-function MenuButton({
+function ActionButton({
   onClick,
-  active,
   loading,
+  active,
+  icon,
   children,
 }: {
   onClick: () => void;
-  active?: boolean;
   loading: boolean;
-  children: React.ReactNode;
+  active?: boolean;
+  icon: ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={loading}
-      className="rpg-mono text-[12px] w-full text-left px-5 py-3 cursor-pointer transition-all disabled:opacity-50 flex items-center justify-between"
-      style={{
-        color: active ? "var(--rpg-gold)" : "var(--rpg-text)",
-        background: active ? "rgba(200, 169, 110, 0.06)" : "transparent",
-        borderBottom: "1px solid var(--rpg-border)",
-      }}
-      onMouseEnter={(e) => {
-        if (!active) {
-          e.currentTarget.style.background = "rgba(255, 255, 255, 0.02)";
-          e.currentTarget.style.color = "var(--rpg-gold)";
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!active) {
-          e.currentTarget.style.background = "transparent";
-          e.currentTarget.style.color = "var(--rpg-text)";
-        }
-      }}
+      className={active ? "conclave-btn-primary" : "conclave-btn-secondary"}
     >
-      <span>{children}</span>
-      {loading && (
-        <div
-          className="w-3 h-3 border border-t-transparent rounded-full animate-spin"
-          style={{ borderColor: "var(--rpg-gold-dim)", borderTopColor: "transparent" }}
-        />
-      )}
-      {active && !loading && (
-        <span style={{ color: "var(--rpg-gold-dim)" }}>{"\u25bc"}</span>
-      )}
+      {loading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : icon}
+      {children}
     </button>
+  );
+}
+
+function InlineMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="conclave-inline-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }

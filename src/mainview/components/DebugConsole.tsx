@@ -3,25 +3,16 @@ import { useConclave } from "../hooks/use-conclave";
 
 const LEVEL_COLORS = {
   log: "var(--rpg-text-dim)",
-  info: "#81b29a",
-  warn: "#f2cc8f",
-  error: "#e07a5f",
-  debug: "#c8a96e",
+  info: "var(--rpg-sage)",
+  warn: "var(--rpg-sand)",
+  error: "var(--rpg-danger)",
+  debug: "var(--rpg-gold)",
 } as const;
 
 const SOURCE_COLORS = {
-  bun: "rgba(200, 169, 110, 0.14)",
-  webview: "rgba(129, 178, 154, 0.14)",
+  bun: "rgba(200, 169, 110, 0.16)",
+  webview: "rgba(129, 178, 154, 0.16)",
 } as const;
-
-function formatTime(occurredAt: string): string {
-  return new Date(occurredAt).toLocaleTimeString([], {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
 
 export function DebugConsole({
   embedded = false,
@@ -29,126 +20,84 @@ export function DebugConsole({
   embedded?: boolean;
 }) {
   const { debugConsoleEntries } = useConclave();
-  const logRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!logRef.current) return;
-    logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [debugConsoleEntries]);
-
-  const entryCountLabel = useMemo(() => {
-    if (debugConsoleEntries.length === 0) {
-      return "NO ENTRIES";
+    if (!scrollRef.current) {
+      return;
     }
 
-    return `${debugConsoleEntries.length} ENTRIES`;
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [debugConsoleEntries.length]);
 
-  const content = (
+  const summary = useMemo(() => {
+    return debugConsoleEntries.reduce(
+      (accumulator, entry) => {
+        accumulator[entry.level] += 1;
+        accumulator[entry.source] += 1;
+        return accumulator;
+      },
+      {
+        log: 0,
+        info: 0,
+        warn: 0,
+        error: 0,
+        debug: 0,
+        bun: 0,
+        webview: 0,
+      },
+    );
+  }, [debugConsoleEntries]);
+
+  const body = (
     <>
-      <div
-        className="flex items-center justify-between gap-4 px-5 py-4"
-        style={{ borderBottom: "1px solid var(--rpg-border)" }}
-      >
-        <div>
-          <div
-            className="rpg-font text-[9px] tracking-wider"
-            style={{ color: "var(--rpg-gold-dim)" }}
-          >
-            DEBUG CONSOLE
+      <div className="hud-panel-scroll" style={{ flex: "0 0 auto" }}>
+        <div className="hud-summary-card m-3">
+          <div className="hud-summary-card__header">
+            <span className="hud-summary-card__eyebrow">Console Summary</span>
+            <span className="hud-summary-card__time">{debugConsoleEntries.length} entries</span>
           </div>
-          <p
-            className="rpg-mono text-[9px] mt-1"
-            style={{ color: "var(--rpg-text-muted)" }}
-          >
-            Bun and webview output mirrored into the app.
-          </p>
+          <div className="hud-inline-tags">
+            <ConsoleTag label={`bun ${summary.bun}`} tone="bun" />
+            <ConsoleTag label={`webview ${summary.webview}`} tone="webview" />
+            <ConsoleTag label={`warn ${summary.warn}`} tone="warn" />
+            <ConsoleTag label={`error ${summary.error}`} tone="error" />
+          </div>
         </div>
-        <span
-          className="rpg-mono text-[9px]"
-          style={{ color: "var(--rpg-text-muted)" }}
-        >
-          {entryCountLabel}
-        </span>
       </div>
 
       <div
-        className="flex items-center gap-2 px-5 py-3"
-        style={{ borderBottom: "1px solid rgba(58, 74, 53, 0.3)" }}
-      >
-        {(["bun", "webview"] as const).map((source) => (
-          <span
-            key={source}
-            className="rpg-mono text-[8px] px-2 py-1 uppercase tracking-wider"
-            style={{
-              background: SOURCE_COLORS[source],
-              border: "1px solid rgba(58, 74, 53, 0.45)",
-              color: "var(--rpg-text-muted)",
-            }}
-          >
-            {source}
-          </span>
-        ))}
-      </div>
-
-      <div
-        ref={logRef}
-        className={`px-4 py-4 ${embedded ? "min-h-0 flex-1 overflow-y-auto" : "max-h-[520px] overflow-y-auto"}`}
-        style={{
-          background:
-            "linear-gradient(180deg, rgba(16, 20, 16, 0.96), rgba(10, 13, 10, 0.98))",
-        }}
+        ref={scrollRef}
+        className={`min-h-0 ${embedded ? "flex-1" : "max-h-[520px]"} overflow-y-auto px-3 pb-3`}
       >
         {debugConsoleEntries.length === 0 ? (
-          <div
-            className="rpg-mono text-[10px] min-h-[320px] flex items-center justify-center text-center"
-            style={{ color: "var(--rpg-text-muted)" }}
-          >
-            Waiting for console activity...
-          </div>
+          <p className="hud-empty-state">Waiting for Bun or webview console output.</p>
         ) : (
           <div className="space-y-2">
             {debugConsoleEntries.map((entry) => (
-              <article
-                key={entry.id}
-                className="px-3 py-2"
-                style={{
-                  background: "rgba(255, 255, 255, 0.02)",
-                  border: "1px solid rgba(58, 74, 53, 0.35)",
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className="rpg-mono text-[8px]"
-                    style={{ color: "var(--rpg-text-muted)" }}
-                  >
-                    {formatTime(entry.occurredAt)}
-                  </span>
-                  <span
-                    className="rpg-mono text-[8px] px-1.5 py-0.5 uppercase tracking-wider"
-                    style={{
-                      color: LEVEL_COLORS[entry.level],
-                      border: `1px solid ${LEVEL_COLORS[entry.level]}`,
-                    }}
-                  >
-                    {entry.level}
-                  </span>
-                  <span
-                    className="rpg-mono text-[8px] px-1.5 py-0.5 uppercase tracking-wider"
-                    style={{
-                      background: SOURCE_COLORS[entry.source],
-                      color: "var(--rpg-text-muted)",
-                    }}
-                  >
-                    {entry.source}
-                  </span>
+              <article key={entry.id} className="hud-log-card">
+                <div className="hud-log-card__header">
+                  <div className="hud-log-card__meta">
+                    <span
+                      className="hud-log-card__agent"
+                      style={{ color: LEVEL_COLORS[entry.level] }}
+                    >
+                      {entry.level}
+                    </span>
+                    <span
+                      className="hud-file-chip"
+                      style={{
+                        background: SOURCE_COLORS[entry.source],
+                        borderColor: "rgba(90, 102, 82, 0.35)",
+                        color: "var(--rpg-text-dim)",
+                      }}
+                    >
+                      {entry.source}
+                    </span>
+                  </div>
+                  <span className="hud-log-card__time">{formatTime(entry.occurredAt)}</span>
                 </div>
-                <pre
-                  className="rpg-mono text-[10px] mt-2 whitespace-pre-wrap break-words"
-                  style={{ color: "var(--rpg-text)" }}
-                >
-                  {entry.message}
-                </pre>
+                <pre className="hud-console-message">{entry.message}</pre>
               </article>
             ))}
           </div>
@@ -158,12 +107,55 @@ export function DebugConsole({
   );
 
   if (embedded) {
-    return <div className="flex h-full min-h-0 flex-col">{content}</div>;
+    return <div className="flex min-h-0 flex-1 flex-col">{body}</div>;
   }
 
+  return <section className="rpg-panel overflow-hidden">{body}</section>;
+}
+
+function ConsoleTag({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "bun" | "webview" | "warn" | "error";
+}) {
+  const styleMap = {
+    bun: {
+      background: SOURCE_COLORS.bun,
+      color: "var(--rpg-gold)",
+    },
+    webview: {
+      background: SOURCE_COLORS.webview,
+      color: "var(--rpg-sage)",
+    },
+    warn: {
+      background: "rgba(242, 204, 143, 0.12)",
+      color: "var(--rpg-sand)",
+    },
+    error: {
+      background: "rgba(196, 92, 74, 0.12)",
+      color: "var(--rpg-danger)",
+    },
+  } as const;
+
+  const style = styleMap[tone];
+
   return (
-    <section className="rpg-panel min-h-[420px] overflow-hidden">
-      {content}
-    </section>
+    <span
+      className="hud-tag rpg-mono"
+      style={{ background: style.background, borderColor: "rgba(90, 102, 82, 0.35)", color: style.color }}
+    >
+      {label}
+    </span>
   );
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }

@@ -11,8 +11,6 @@ import officeBg from "./assets/office_bg.png";
 
 const APP_WIDTH_VAR = "--app-width";
 const APP_HEIGHT_VAR = "--app-height";
-const APP_VIEWPORT_WIDTH = `var(${APP_WIDTH_VAR}, 100%)`;
-const APP_VIEWPORT_HEIGHT = `var(${APP_HEIGHT_VAR}, 100%)`;
 
 function readAppViewportSize(): { width: number; height: number } {
   const root = document.getElementById("root");
@@ -409,10 +407,8 @@ function GameScene() {
 
   return (
     <main
-      className="bg-center bg-no-repeat relative overflow-hidden"
+      className="conclave-scene w-full h-full bg-center bg-no-repeat relative overflow-hidden"
       style={{
-        width: APP_VIEWPORT_WIDTH,
-        height: APP_VIEWPORT_HEIGHT,
         backgroundImage: `url(${officeBg})`,
         backgroundSize: "contain",
         backgroundColor: "var(--rpg-bg)",
@@ -424,6 +420,8 @@ function GameScene() {
           background: "radial-gradient(ellipse at center, transparent 50%, rgba(14, 18, 14, 0.4) 100%)",
         }}
       />
+      <div className="conclave-scene__scrim pointer-events-none absolute inset-0" />
+      <div className="conclave-scene__grid pointer-events-none absolute inset-0" />
 
       <ToastContainer toasts={toasts} />
 
@@ -483,12 +481,13 @@ function GameScene() {
 
 function AppRouter() {
   const { activeProject, connected } = useConclave();
-  const [gameSceneReady, setGameSceneReady] = useState(true);
+  const [sceneReady, setSceneReady] = useState(false);
 
   // useLayoutEffect ensures --app-height is set synchronously after DOM
   // mutation but before the browser paints, preventing the bottom bar from
   // rendering offscreen on the first frame after project load.
   useLayoutEffect(() => {
+    setSceneReady(false);
     syncAppViewport();
 
     const animationFrames = new Set<number>();
@@ -520,12 +519,6 @@ function AppRouter() {
       resizeObserver.observe(root);
     }
 
-    if (activeProject) {
-      setGameSceneReady(false);
-    } else {
-      setGameSceneReady(true);
-    }
-
     schedule();
     scheduleTimeout(0);
     scheduleTimeout(100);
@@ -533,25 +526,24 @@ function AppRouter() {
     void document.fonts?.ready.then(() => {
       schedule();
     });
-    if (activeProject) {
-      const revealFrameId = requestAnimationFrame(() => {
-        const secondRevealFrameId = requestAnimationFrame(() => {
-          animationFrames.delete(secondRevealFrameId);
-          syncAppViewport();
-          setGameSceneReady(true);
-        });
-        animationFrames.add(secondRevealFrameId);
-        animationFrames.delete(revealFrameId);
-      });
-      animationFrames.add(revealFrameId);
-      scheduleTimeout(180);
-      const revealTimeoutId = window.setTimeout(() => {
-        timeouts.delete(revealTimeoutId);
+
+    const revealFrameId = requestAnimationFrame(() => {
+      const secondRevealFrameId = requestAnimationFrame(() => {
+        animationFrames.delete(secondRevealFrameId);
         syncAppViewport();
-        setGameSceneReady(true);
-      }, 180);
-      timeouts.add(revealTimeoutId);
-    }
+        setSceneReady(true);
+      });
+      animationFrames.add(secondRevealFrameId);
+      animationFrames.delete(revealFrameId);
+    });
+    animationFrames.add(revealFrameId);
+    scheduleTimeout(180);
+    const revealTimeoutId = window.setTimeout(() => {
+      timeouts.delete(revealTimeoutId);
+      syncAppViewport();
+      setSceneReady(true);
+    }, 180);
+    timeouts.add(revealTimeoutId);
 
     window.addEventListener("resize", schedule);
     window.addEventListener("orientationchange", schedule);
@@ -577,8 +569,8 @@ function AppRouter() {
       <main
         className="flex items-center justify-center overflow-hidden"
         style={{
-          width: APP_VIEWPORT_WIDTH,
-          height: APP_VIEWPORT_HEIGHT,
+          width: "100%",
+          height: "100%",
           background: "var(--rpg-bg)",
         }}
       >
@@ -607,16 +599,44 @@ function AppRouter() {
   }
 
   if (!activeProject) {
+    if (!sceneReady) {
+      return (
+        <main
+          className="flex items-center justify-center overflow-hidden"
+          style={{
+            width: "100%",
+            height: "100%",
+            background: "var(--rpg-bg)",
+          }}
+        >
+          <div className="flex flex-col items-center gap-2">
+            <div
+              className="rpg-font text-[12px] tracking-[0.2em]"
+              style={{ color: "var(--rpg-gold-dim)" }}
+            >
+              ENTERING CONCLAVE
+            </div>
+            <div
+              className="rpg-mono text-[10px]"
+              style={{ color: "var(--rpg-text-muted)" }}
+            >
+              Stabilizing viewport...
+            </div>
+          </div>
+        </main>
+      );
+    }
+
     return <ProjectScreen />;
   }
 
-  if (!gameSceneReady) {
+  if (!sceneReady) {
     return (
       <main
         className="flex items-center justify-center overflow-hidden"
         style={{
-          width: APP_VIEWPORT_WIDTH,
-          height: APP_VIEWPORT_HEIGHT,
+          width: "100%",
+          height: "100%",
           background: "var(--rpg-bg)",
         }}
       >
@@ -644,7 +664,7 @@ function AppRouter() {
 export default function App() {
   return (
     <ConclaveProvider>
-      <div className="w-full overflow-hidden" style={{ height: APP_VIEWPORT_HEIGHT }}>
+      <div className="w-full overflow-hidden" style={{ height: "100%" }}>
         <AppRouter />
       </div>
       <QuotaExhaustedDialog />

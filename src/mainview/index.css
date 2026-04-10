@@ -229,6 +229,28 @@
    RPG Panel System
    ========================================================================= */
 
+.conclave-scene {
+  isolation: isolate;
+}
+
+.conclave-scene__scrim {
+  background:
+    linear-gradient(180deg, rgba(8, 11, 8, 0.6) 0%, transparent 22%, transparent 72%, rgba(8, 11, 8, 0.68) 100%),
+    radial-gradient(circle at 22% 14%, rgba(200, 169, 110, 0.08), transparent 28%),
+    radial-gradient(circle at 82% 18%, rgba(129, 178, 154, 0.08), transparent 24%);
+  z-index: 0;
+}
+
+.conclave-scene__grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.65), transparent 88%);
+  opacity: 0.18;
+  z-index: 0;
+}
+
 .rpg-panel {
   background: var(--rpg-panel);
   border: 1px solid var(--rpg-border);
@@ -264,6 +286,1260 @@
 
 .rpg-mono {
   font-family: var(--font-mono);
+}
+
+.hud-top-bar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 16px;
+  z-index: 20;
+}
+
+.hud-top-bar__left,
+.hud-top-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.hud-top-bar__left {
+  flex: 1 1 560px;
+}
+
+.hud-top-bar__right {
+  flex: 1 1 320px;
+  justify-content: flex-end;
+}
+
+.hud-brand-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hud-brand {
+  font-family: var(--font-display);
+  color: var(--rpg-gold);
+  font-size: 14px;
+  letter-spacing: 0.18em;
+}
+
+.hud-brand-subtitle {
+  font-family: var(--font-mono);
+  color: var(--rpg-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 11rem;
+}
+
+.hud-project-chip,
+.hud-connection-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px;
+  background: rgba(14, 18, 14, 0.84);
+  border: 1px solid rgba(90, 102, 82, 0.55);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.hud-project-chip__label {
+  font-family: var(--font-mono);
+  color: var(--rpg-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.hud-project-chip__value {
+  font-family: var(--font-mono);
+  color: var(--rpg-text);
+  font-size: 11px;
+}
+
+.hud-connection-pill {
+  font-family: var(--font-mono);
+  color: var(--rpg-text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.hud-connection-pill__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.hud-connection-pill__divider {
+  width: 1px;
+  height: 12px;
+  background: rgba(90, 102, 82, 0.7);
+}
+
+.hud-inline-actions,
+.hud-inline-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hud-chip,
+.hud-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid rgba(90, 102, 82, 0.5);
+  background: rgba(14, 18, 14, 0.84);
+  color: var(--rpg-text-dim);
+  white-space: nowrap;
+}
+
+.hud-chip--good {
+  color: var(--rpg-sage);
+  border-color: rgba(129, 178, 154, 0.35);
+  background: rgba(129, 178, 154, 0.08);
+}
+
+.hud-chip--attention {
+  color: var(--rpg-gold);
+  border-color: rgba(200, 169, 110, 0.35);
+  background: rgba(200, 169, 110, 0.08);
+}
+
+.hud-chip--warning {
+  color: var(--rpg-sand);
+  border-color: rgba(242, 204, 143, 0.35);
+  background: rgba(242, 204, 143, 0.08);
+}
+
+.hud-chip--danger,
+.hud-chip--danger-muted {
+  color: var(--rpg-danger);
+  border-color: rgba(196, 92, 74, 0.38);
+  background: rgba(196, 92, 74, 0.08);
+}
+
+.hud-chip--neutral {
+  color: var(--rpg-text-dim);
+}
+
+.hud-summary-rail {
+  position: absolute;
+  top: 64px;
+  right: 16px;
+  bottom: 76px;
+  width: min(22rem, calc(100vw - 2rem));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 15;
+}
+
+.hud-summary-card,
+.hud-list-card,
+.hud-log-card {
+  background: linear-gradient(180deg, rgba(24, 30, 23, 0.95) 0%, rgba(18, 23, 17, 0.95) 100%);
+  border: 1px solid rgba(90, 102, 82, 0.5);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+}
+
+.hud-summary-card {
+  padding: 12px;
+}
+
+.hud-summary-card__header,
+.hud-log-card__header,
+.hud-list-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hud-summary-card__eyebrow,
+.hud-file-block__label,
+.hud-section-header {
+  font-family: var(--font-display);
+  color: var(--rpg-gold-dim);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.hud-summary-card__time,
+.hud-list-card__time,
+.hud-log-card__time,
+.hud-panel-header__subtitle,
+.hud-panel-footer__label,
+.hud-summary-line__label,
+.hud-metric-card__label {
+  font-family: var(--font-mono);
+  color: var(--rpg-text-muted);
+  font-size: 10px;
+}
+
+.hud-summary-card__headline,
+.hud-list-card__title,
+.hud-log-card__summary,
+.hud-panel-header__title {
+  font-family: var(--font-mono);
+  color: var(--rpg-text);
+}
+
+.hud-summary-card__headline,
+.hud-list-card__title,
+.hud-log-card__summary {
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 8px;
+}
+
+.hud-summary-card__body,
+.hud-list-card__body,
+.hud-log-detail,
+.hud-empty-state,
+.hud-agenda-item__title,
+.hud-agenda-note {
+  font-family: var(--font-mono);
+  color: var(--rpg-text-dim);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.hud-summary-list,
+.hud-summary-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.hud-summary-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hud-summary-line__value {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: right;
+}
+
+.hud-inline-link,
+.hud-panel-close {
+  font-family: var(--font-mono);
+  color: var(--rpg-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.hud-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.hud-metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(90, 102, 82, 0.35);
+}
+
+.hud-metric-card__value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+}
+
+.hud-alert-line {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0 0;
+  border-top: 1px solid rgba(90, 102, 82, 0.3);
+}
+
+.hud-alert-line__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rpg-danger);
+  text-transform: uppercase;
+}
+
+.hud-alert-line__body,
+.hud-digest__meta,
+.hud-log-card__meta,
+.hud-bottom-stats,
+.hud-panel-footer__value,
+.hud-file-chip,
+.hud-console-message {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.hud-digest__meta,
+.hud-log-card__meta,
+.hud-bottom-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--rpg-text-muted);
+}
+
+.hud-panel-shell {
+  backdrop-filter: blur(8px);
+  max-height: calc(100% - 88px);
+}
+
+.hud-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--rpg-border);
+}
+
+.hud-panel-header__title {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hud-panel-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.hud-panel-footer {
+  padding: 12px 16px;
+  border-top: 1px solid rgba(90, 102, 82, 0.4);
+}
+
+.hud-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(200, 169, 110, 0.05);
+  border-top: 1px solid rgba(90, 102, 82, 0.32);
+  border-bottom: 1px solid rgba(90, 102, 82, 0.32);
+}
+
+.hud-section-header__count {
+  font-family: var(--font-mono);
+  color: var(--rpg-text-muted);
+  font-size: 10px;
+}
+
+.hud-list-card,
+.hud-log-card {
+  padding: 10px 12px;
+}
+
+.hud-list-card + .hud-list-card,
+.hud-log-card + .hud-log-card {
+  margin-top: 8px;
+}
+
+.hud-list-card__footer,
+.hud-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.hud-list-card__meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rpg-text-muted);
+}
+
+.hud-log-card__agent {
+  color: var(--rpg-gold);
+  text-transform: uppercase;
+}
+
+.hud-log-detail {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--rpg-sage-dim);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.hud-log-detail--error {
+  border-left-color: var(--rpg-danger);
+  color: var(--rpg-danger);
+}
+
+.hud-file-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(90, 102, 82, 0.38);
+  color: var(--rpg-text-dim);
+  white-space: nowrap;
+}
+
+.hud-empty-state {
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.hud-empty-state--compact {
+  padding: 12px 0 0;
+  text-align: left;
+}
+
+.hud-task-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 56px;
+  display: flex;
+  justify-content: center;
+  z-index: 12;
+}
+
+.hud-task-strip__inner {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+
+.hud-bottom-stats {
+  color: var(--rpg-text-dim);
+  gap: 12px;
+}
+
+.hud-bottom-stats strong {
+  color: var(--rpg-text);
+  font-weight: 600;
+}
+
+.hud-console-message {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--rpg-text);
+}
+
+.hud-agenda-item {
+  padding-left: 10px;
+  border-left: 2px solid rgba(90, 102, 82, 0.4);
+}
+
+.hud-agenda-note {
+  margin-top: 6px;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(129, 178, 154, 0.24);
+}
+
+.hud-agenda-note__role {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--rpg-copper);
+  text-transform: uppercase;
+}
+
+.conclave-dashboard-shell {
+  position: relative;
+}
+
+.conclave-workspace-shell {
+  position: relative;
+  overflow: hidden;
+  color: var(--rpg-text);
+  background:
+    linear-gradient(180deg, rgba(10, 14, 11, 0.98) 0%, rgba(14, 19, 15, 1) 100%);
+}
+
+.conclave-workspace-scroll {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.conclave-workspace-content {
+  width: min(1080px, 100%);
+  margin: 0 auto;
+  padding: 28px 22px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.conclave-topline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-bottom: 1px solid rgba(90, 110, 82, 0.32);
+  padding-bottom: 14px;
+}
+
+.conclave-brandline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--rpg-gold);
+}
+
+.conclave-page-title {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 28px;
+  letter-spacing: 0.01em;
+  color: var(--rpg-text);
+}
+
+.conclave-page-title--compact {
+  margin-top: 0;
+}
+
+.conclave-page-subtitle {
+  margin-top: 4px;
+  max-width: 62ch;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--rpg-text-dim);
+}
+
+.conclave-inline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.conclave-inline-metric {
+  min-width: 140px;
+  border: 1px solid rgba(90, 110, 82, 0.36);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.conclave-inline-metric span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rpg-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.conclave-inline-metric strong {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--rpg-text);
+}
+
+.conclave-section {
+  border-top: 1px solid rgba(90, 110, 82, 0.24);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.conclave-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.conclave-section-head h2 {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--rpg-text);
+}
+
+.conclave-section-head p {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--rpg-text-muted);
+}
+
+.conclave-form-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.conclave-field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conclave-field-block--full {
+  grid-column: 1 / -1;
+}
+
+.conclave-field-block > span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rpg-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.conclave-field-block > small {
+  margin-top: -4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rpg-text-muted);
+}
+
+.conclave-row-input {
+  display: flex;
+  gap: 8px;
+}
+
+.conclave-input {
+  width: 100%;
+  border: 1px solid rgba(90, 110, 82, 0.42);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--rpg-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.conclave-input::placeholder {
+  color: var(--rpg-text-muted);
+}
+
+.conclave-input:focus {
+  border-color: rgba(200, 169, 110, 0.55);
+  box-shadow: 0 0 0 2px rgba(200, 169, 110, 0.12);
+}
+
+.conclave-input:disabled {
+  opacity: 0.55;
+}
+
+.conclave-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conclave-actions-row--end {
+  justify-content: flex-end;
+}
+
+.conclave-form-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.conclave-form-footer p {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rpg-text-dim);
+}
+
+.conclave-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.conclave-list-item {
+  border: 1px solid rgba(90, 110, 82, 0.32);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.conclave-list-item__main {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+}
+
+.conclave-list-item__open {
+  flex: 1;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+
+.conclave-list-item__open:hover:not(:disabled) {
+  border-color: rgba(90, 110, 82, 0.34);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.conclave-list-item__open:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.conclave-list-item__title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conclave-list-item__title-row h3 {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--rpg-text);
+}
+
+.conclave-list-item__title-row span,
+.conclave-list-item p,
+.conclave-list-item code,
+.conclave-list-item__status,
+.conclave-list-item__confirm p,
+.conclave-footer-row,
+.conclave-empty-state {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.conclave-list-item__title-row span {
+  color: var(--rpg-text-muted);
+}
+
+.conclave-list-item p {
+  margin-top: 6px;
+  color: var(--rpg-text-dim);
+  line-height: 1.5;
+}
+
+.conclave-list-item code {
+  display: block;
+  margin-top: 8px;
+  color: var(--rpg-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conclave-list-item__status {
+  border-top: 1px solid rgba(90, 110, 82, 0.32);
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--rpg-text-muted);
+}
+
+.conclave-list-item__confirm {
+  border-top: 1px solid rgba(196, 92, 74, 0.34);
+  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  background: rgba(196, 92, 74, 0.08);
+}
+
+.conclave-btn-secondary,
+.conclave-btn-primary,
+.conclave-btn-danger {
+  border: 1px solid transparent;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--rpg-text);
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.conclave-btn-secondary {
+  border-color: rgba(90, 110, 82, 0.4);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.conclave-btn-secondary:hover:not(:disabled) {
+  border-color: rgba(200, 169, 110, 0.4);
+}
+
+.conclave-btn-primary {
+  border-color: rgba(200, 169, 110, 0.45);
+  background: rgba(200, 169, 110, 0.1);
+  color: var(--rpg-gold);
+}
+
+.conclave-btn-primary:hover:not(:disabled) {
+  background: rgba(200, 169, 110, 0.16);
+}
+
+.conclave-btn-danger {
+  border-color: rgba(196, 92, 74, 0.44);
+  background: rgba(196, 92, 74, 0.1);
+  color: var(--rpg-danger);
+}
+
+.conclave-btn-secondary:disabled,
+.conclave-btn-primary:disabled,
+.conclave-btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.conclave-footer-row {
+  border-top: 1px solid rgba(90, 110, 82, 0.24);
+  padding-top: 10px;
+  color: var(--rpg-text-muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.conclave-inline-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(196, 92, 74, 0.44);
+  background: rgba(196, 92, 74, 0.1);
+  color: var(--rpg-danger);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 7px 10px;
+}
+
+.conclave-empty-state {
+  border: 1px dashed rgba(90, 110, 82, 0.4);
+  color: var(--rpg-text-muted);
+  padding: 18px;
+}
+
+.conclave-settings-head-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.conclave-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.conclave-settings-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.6fr);
+}
+
+.conclave-settings-summary,
+.conclave-settings-health {
+  border: 1px solid rgba(90, 110, 82, 0.32);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 12px;
+}
+
+.conclave-settings-summary__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conclave-settings-summary__row span,
+.conclave-settings-summary dl dt,
+.conclave-settings-health__head span,
+.conclave-provider-option__head span,
+.conclave-feedback-box span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--rpg-text-muted);
+  text-transform: uppercase;
+}
+
+.conclave-settings-summary__row strong,
+.conclave-provider-option__head strong,
+.conclave-feedback-box p,
+.conclave-settings-health p,
+.conclave-settings-health small,
+.conclave-settings-summary dl dd,
+.conclave-provider-option p {
+  font-family: var(--font-mono);
+}
+
+.conclave-settings-summary__row strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--rpg-text);
+}
+
+.conclave-settings-summary dl {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.conclave-settings-summary dl div {
+  border: 1px solid rgba(90, 110, 82, 0.28);
+  padding: 8px;
+}
+
+.conclave-settings-summary dl dd {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--rpg-text);
+  word-break: break-word;
+}
+
+.conclave-settings-health__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--rpg-sage);
+}
+
+.conclave-settings-health p {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--rpg-text-dim);
+  line-height: 1.6;
+}
+
+.conclave-settings-health small {
+  display: block;
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--rpg-text-muted);
+}
+
+.conclave-provider-list {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.conclave-provider-option {
+  border: 1px solid rgba(90, 110, 82, 0.34);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+  padding: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.conclave-provider-option__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conclave-provider-option__head strong {
+  font-size: 12px;
+  color: var(--rpg-text);
+  text-transform: none;
+}
+
+.conclave-provider-option p {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--rpg-text-dim);
+  line-height: 1.5;
+}
+
+.conclave-provider-option--active {
+  border-color: rgba(200, 169, 110, 0.45);
+  background: rgba(200, 169, 110, 0.08);
+}
+
+.conclave-provider-option--active .lucide {
+  color: var(--rpg-gold);
+}
+
+.conclave-feedback-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.conclave-feedback-box {
+  border: 1px solid rgba(90, 110, 82, 0.36);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+  min-height: 76px;
+}
+
+.conclave-feedback-box p {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--rpg-text-dim);
+  line-height: 1.5;
+}
+
+.conclave-feedback-box--success {
+  border-color: rgba(129, 178, 154, 0.4);
+}
+
+.conclave-feedback-box--failure {
+  border-color: rgba(196, 92, 74, 0.44);
+}
+
+.conclave-corner-button {
+  position: absolute;
+  right: 22px;
+  bottom: 22px;
+  z-index: 20;
+  width: 42px;
+  height: 42px;
+  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(90, 110, 82, 0.42);
+  background: rgba(16, 22, 17, 0.92);
+  color: var(--rpg-text);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.conclave-corner-button:hover {
+  border-color: rgba(200, 169, 110, 0.42);
+  background: rgba(21, 28, 22, 0.98);
+  color: var(--rpg-gold);
+}
+
+.conclave-corner-button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 18px 36px rgba(0, 0, 0, 0.28),
+    0 0 0 3px rgba(200, 169, 110, 0.12);
+}
+
+.conclave-settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.conclave-settings-page__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.conclave-settings-page__intro {
+  margin-left: auto;
+  max-width: 520px;
+  text-align: right;
+}
+
+.conclave-settings-page__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--rpg-gold-dim);
+}
+
+.conclave-settings-page__title {
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  color: var(--rpg-text);
+}
+
+.conclave-settings-page__body {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--rpg-text-muted);
+}
+
+.conclave-home-card {
+  background:
+    linear-gradient(180deg, rgba(34, 45, 33, 0.96) 0%, rgba(21, 28, 21, 0.98) 100%);
+  border: 1px solid rgba(58, 74, 53, 0.72);
+  border-radius: 28px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 24px 60px rgba(0, 0, 0, 0.32);
+  position: relative;
+  overflow: hidden;
+}
+
+.conclave-home-card::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 27px;
+  border: 1px solid rgba(90, 110, 82, 0.18);
+  pointer-events: none;
+}
+
+.conclave-field-input {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(90, 110, 82, 0.46);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--rpg-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 12px 14px;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+
+.conclave-field-input::placeholder {
+  color: var(--rpg-text-muted);
+}
+
+.conclave-field-input:focus {
+  border-color: rgba(200, 169, 110, 0.54);
+  box-shadow: 0 0 0 3px rgba(200, 169, 110, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.conclave-field-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.conclave-readout-box {
+  border-radius: 16px;
+  border: 1px solid rgba(90, 110, 82, 0.42);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--rpg-text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 12px 14px;
+}
+
+.conclave-secondary-btn,
+.conclave-primary-btn,
+.conclave-danger-btn {
+  border-radius: 999px;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 10px 16px;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+  cursor: pointer;
+}
+
+.conclave-secondary-btn:disabled,
+.conclave-primary-btn:disabled,
+.conclave-danger-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
+.conclave-secondary-btn {
+  border-color: rgba(90, 110, 82, 0.44);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--rpg-text);
+}
+
+.conclave-secondary-btn:hover:not(:disabled) {
+  border-color: rgba(200, 169, 110, 0.34);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--rpg-gold);
+  transform: translateY(-1px);
+}
+
+.conclave-primary-btn {
+  border-color: rgba(200, 169, 110, 0.42);
+  background:
+    linear-gradient(180deg, rgba(200, 169, 110, 0.2) 0%, rgba(200, 169, 110, 0.08) 100%);
+  color: var(--rpg-gold);
+  box-shadow: 0 12px 24px rgba(200, 169, 110, 0.08);
+}
+
+.conclave-primary-btn:hover:not(:disabled) {
+  border-color: rgba(200, 169, 110, 0.6);
+  background:
+    linear-gradient(180deg, rgba(200, 169, 110, 0.28) 0%, rgba(200, 169, 110, 0.12) 100%);
+  transform: translateY(-1px);
+}
+
+.conclave-danger-btn {
+  border-color: rgba(196, 92, 74, 0.36);
+  background: rgba(196, 92, 74, 0.1);
+  color: var(--rpg-danger);
+}
+
+.conclave-danger-btn:hover:not(:disabled) {
+  border-color: rgba(196, 92, 74, 0.56);
+  background: rgba(196, 92, 74, 0.16);
+  transform: translateY(-1px);
 }
 
 /* =========================================================================
@@ -467,6 +1743,65 @@
   white-space: nowrap;
   border: 1px solid;
   transition: all 0.15s ease;
+}
+
+@media (max-width: 1180px) {
+  .hud-summary-rail {
+    width: min(18rem, calc(100vw - 2rem));
+  }
+
+  .hud-project-chip {
+    display: none;
+  }
+
+  .hud-top-bar {
+    gap: 10px;
+  }
+
+  .hud-top-bar__right {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 980px) {
+  .hud-summary-rail {
+    display: none;
+  }
+
+  .conclave-form-grid,
+  .conclave-settings-grid,
+  .conclave-provider-list,
+  .conclave-feedback-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .conclave-form-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .conclave-settings-summary dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .conclave-settings-page__header {
+    flex-direction: column;
+  }
+
+  .conclave-settings-page__intro {
+    margin-left: 0;
+    max-width: none;
+    text-align: left;
+  }
+}
+
+@media (max-width: 640px) {
+  .conclave-corner-button {
+    right: 16px;
+    bottom: 16px;
+    width: 40px;
+    height: 40px;
+  }
 }
 
 /* =========================================================================

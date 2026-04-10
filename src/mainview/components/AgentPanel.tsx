@@ -1,9 +1,9 @@
-import { useRef, useEffect } from "react";
 import type { AgentState } from "../../shared/agent/Agent";
 import type {
   SerializedAgentEvent,
   SerializedTask,
 } from "../../shared/rpc/rpc-schema";
+import { extractChangedFiles } from "../utils/activity-log";
 
 const STATUS_COLORS: Record<string, string> = {
   proposed: "#c8a96e",
@@ -18,7 +18,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 const STATE_LABELS: Record<AgentState, { text: string; color: string }> = {
   idle: { text: "Standing by", color: "var(--rpg-text-muted)" },
-  working: { text: "Working", color: "var(--rpg-sage)" },
+  working: { text: "Executing task", color: "var(--rpg-sage)" },
   heading_to_meeting: { text: "Moving to council", color: "var(--rpg-gold)" },
   in_meeting: { text: "In council", color: "var(--rpg-gold)" },
   returning: { text: "Returning to post", color: "var(--rpg-text-dim)" },
@@ -50,175 +50,191 @@ export function AgentPanel({
   agentEvents,
   onClose,
 }: AgentPanelProps) {
-  const logRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [agentEvents.length]);
-
-  const currentTask = tasks.find((t) =>
-    ["in_progress", "assigned"].includes(t.status),
+  const stateInfo = STATE_LABELS[agentState];
+  const currentTask = tasks.find((task) =>
+    ["assigned", "in_progress", "review"].includes(task.status),
   );
-  const completedTasks = tasks.filter((t) => t.status === "done");
-  const failedTasks = tasks.filter((t) => t.status === "failed");
-
-  const logEvents = agentEvents
-    .filter((e) =>
+  const completedTasks = tasks.filter((task) => task.status === "done");
+  const failedTasks = tasks.filter((task) => task.status === "failed");
+  const activeTasks = tasks.filter((task) =>
+    ["assigned", "in_progress", "review"].includes(task.status),
+  );
+  const recentTasks = [...tasks]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, 4);
+  const logEvents = [...agentEvents]
+    .filter((event) =>
       [
         "agent.output.produced",
         "agent.tool.invoked",
         "agent.error",
         "agent.turn.completed",
-      ].includes(e.type),
+      ].includes(event.type),
     )
-    .slice(-120);
-
-  const stateInfo = STATE_LABELS[agentState];
+    .slice(-80)
+    .reverse();
 
   const totalCost = agentEvents
-    .filter((e) => e.type === "agent.turn.completed" && e.costUsd !== undefined)
-    .reduce((sum, e) => sum + (e.costUsd ?? 0), 0);
+    .filter((event) => event.type === "agent.turn.completed")
+    .reduce((sum, event) => sum + (event.costUsd ?? 0), 0);
+  const totalDurationMs = agentEvents
+    .filter((event) => event.type === "agent.turn.completed")
+    .reduce((sum, event) => sum + (event.durationMs ?? 0), 0);
+  const changedFiles = [...new Set(agentEvents.flatMap((event) => extractChangedFiles(event)))];
 
   return (
-    <div
-      className="absolute top-10 left-5 w-[340px] pointer-events-auto flex flex-col rpg-panel overflow-hidden"
-      style={{ bottom: 56, maxHeight: "calc(var(--app-height, 100%) - 70px)" }}
+    <aside
+      className="absolute top-16 left-4 z-40 pointer-events-auto flex min-h-0 flex-col overflow-hidden rpg-panel hud-panel-shell"
+      style={{
+        bottom: 72,
+        width: "min(24rem, calc(100vw - 2rem))",
+      }}
     >
       <div
-        className="px-4 py-3"
+        className="hud-panel-header"
         style={{
-          borderBottom: "1px solid var(--rpg-border)",
-          background: `linear-gradient(180deg, ${color}10 0%, transparent 100%)`,
+          background: `linear-gradient(180deg, ${color}14 0%, rgba(0, 0, 0, 0) 100%)`,
           borderLeft: `3px solid ${color}`,
         }}
       >
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="rpg-font text-[12px] tracking-wider" style={{ color }}>
-              {label}
+        <div>
+          <div className="hud-panel-header__title">{label}</div>
+          <p className="hud-panel-header__subtitle">{ROLE_TITLES[role] ?? role}</p>
+          <div className="hud-inline-tags mt-2">
+            <span className="hud-tag" style={{ borderColor: `${stateInfo.color}44`, color: stateInfo.color }}>
+              {stateInfo.text}
             </span>
-            <span
-              className="rpg-mono text-[11px] ml-2"
-              style={{ color: "var(--rpg-text-dim)" }}
-            >
-              {ROLE_TITLES[role] ?? role}
-            </span>
+            {currentTask && (
+              <span
+                className="hud-tag"
+                style={{
+                  borderColor: `${STATUS_COLORS[currentTask.status] ?? color}44`,
+                  color: STATUS_COLORS[currentTask.status] ?? color,
+                }}
+              >
+                {humanizeValue(currentTask.status)}
+              </span>
+            )}
           </div>
-          <button
-            onClick={onClose}
-            className="cursor-pointer transition-colors"
-            style={{ color: "var(--rpg-text-muted)" }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--rpg-text)")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--rpg-text-muted)")}
-          >
-            &times;
-          </button>
         </div>
-        <div className="flex items-center gap-1.5 mt-1">
-          <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{
-              background: stateInfo.color,
-              boxShadow: agentState === "working" ? `0 0 6px ${color}60` : "none",
-            }}
-          />
-          <span className="rpg-mono text-[11px]" style={{ color: stateInfo.color }}>
-            {stateInfo.text}
-          </span>
-        </div>
+        <button onClick={onClose} className="hud-panel-close" aria-label={`Close ${label}`}>
+          ×
+        </button>
       </div>
 
-      <div
-        className="grid grid-cols-4 gap-px"
-        style={{ background: "var(--rpg-border)" }}
-      >
-        <StatCell label="TOTAL" value={String(tasks.length)} color="var(--rpg-text-dim)" />
-        <StatCell label="DONE" value={String(completedTasks.length)} color="var(--rpg-forest-dark)" />
-        <StatCell label="FAILED" value={String(failedTasks.length)} color="var(--rpg-danger)" />
+      <div className="grid grid-cols-4 gap-px" style={{ background: "var(--rpg-border)" }}>
+        <StatCell label="Tasks" value={String(tasks.length)} color="var(--rpg-text)" />
+        <StatCell label="Done" value={String(completedTasks.length)} color="var(--rpg-forest-dark)" />
+        <StatCell label="Fail" value={String(failedTasks.length)} color="var(--rpg-danger)" />
         <StatCell
-          label="COST"
+          label="Cost"
           value={totalCost > 0 ? `$${totalCost.toFixed(3)}` : "$0"}
           color="var(--rpg-copper)"
         />
       </div>
 
-      <div
-        className="px-3 py-2.5"
-        style={{ borderBottom: "1px solid var(--rpg-border)" }}
-      >
-        <span
-          className="rpg-font text-[11px] tracking-wider block mb-1.5"
-          style={{ color: "var(--rpg-gold-dim)" }}
-        >
-          CURRENT QUEST
-        </span>
-        {currentTask ? (
-          <div>
-            <div
-              className="rpg-mono text-[11px]"
-              style={{ color: "var(--rpg-text)" }}
-            >
-              {currentTask.title}
-            </div>
-            {currentTask.description && (
-              <div
-                className="rpg-mono text-[11px] mt-1"
-                style={{ color: "var(--rpg-text-dim)" }}
-              >
-                {currentTask.description.slice(0, 150)}
-                {currentTask.description.length > 150 ? "\u2026" : ""}
+      <div className="hud-panel-scroll">
+        <section className="hud-summary-card m-3">
+          <div className="hud-summary-card__header">
+            <span className="hud-summary-card__eyebrow">Current Task</span>
+            <span className="hud-summary-card__time">
+              {currentTask ? `${relativeTime(currentTask.updatedAt)} ago` : "idle"}
+            </span>
+          </div>
+
+          {currentTask ? (
+            <>
+              <p className="hud-summary-card__headline">{currentTask.title}</p>
+              {currentTask.description && (
+                <p className="hud-summary-card__body">{truncateText(currentTask.description, 180)}</p>
+              )}
+              <div className="hud-inline-tags">
+                <span className="hud-file-chip">{humanizeValue(currentTask.taskType)}</span>
+                {currentTask.deps.length > 0 && (
+                  <span className="hud-file-chip">
+                    {currentTask.deps.length} dep{currentTask.deps.length === 1 ? "" : "s"}
+                  </span>
+                )}
               </div>
-            )}
-            <div className="mt-1.5">
-              <span
-                className="rpg-mono text-[11px] inline-block px-2 py-0.5"
-                style={{
-                  color: STATUS_COLORS[currentTask.status],
-                  border: `1px solid ${STATUS_COLORS[currentTask.status]}44`,
-                  background: `${STATUS_COLORS[currentTask.status]}12`,
-                }}
-              >
-                {currentTask.status.replace("_", " ")}
-              </span>
+            </>
+          ) : (
+            <p className="hud-summary-card__body">No active assignment. This agent is ready for the next directive.</p>
+          )}
+        </section>
+
+        <section className="hud-summary-card mx-3 mb-3">
+          <div className="hud-summary-card__header">
+            <span className="hud-summary-card__eyebrow">Session Readout</span>
+          </div>
+          <div className="hud-summary-list">
+            <div className="hud-summary-line">
+              <span className="hud-summary-line__label">Active workload</span>
+              <span className="hud-summary-line__value">{activeTasks.length} task(s)</span>
+            </div>
+            <div className="hud-summary-line">
+              <span className="hud-summary-line__label">Total runtime</span>
+              <span className="hud-summary-line__value">{(totalDurationMs / 1000).toFixed(1)}s</span>
+            </div>
+            <div className="hud-summary-line">
+              <span className="hud-summary-line__label">Touched files</span>
+              <span className="hud-summary-line__value">{changedFiles.length}</span>
             </div>
           </div>
-        ) : (
-          <span
-            className="rpg-mono text-[11px]"
-            style={{ color: "var(--rpg-text-muted)" }}
-          >
-            Awaiting assignment
-          </span>
-        )}
-      </div>
+          {changedFiles.length > 0 && (
+            <div className="hud-file-list mt-3">
+              {changedFiles.slice(0, 6).map((file) => (
+                <span key={file} className="hud-file-chip">
+                  {file}
+                </span>
+              ))}
+            </div>
+          )}
+        </section>
 
-      <div
-        className="rpg-font text-[11px] tracking-wider px-3 py-1.5"
-        style={{
-          color: "var(--rpg-gold-dim)",
-          borderBottom: "1px solid var(--rpg-border)",
-          background: "rgba(200, 169, 110, 0.03)",
-        }}
-      >
-        ACTIVITY LOG
-      </div>
-      <div ref={logRef} className="flex-1 overflow-y-auto">
-        {logEvents.length === 0 ? (
-          <p
-            className="rpg-mono text-[11px] text-center py-6"
-            style={{ color: "var(--rpg-text-muted)" }}
-          >
-            No activity recorded
-          </p>
-        ) : (
-          logEvents.map((event, i) => (
-            <AgentLogEntry key={`${event.occurredAt}-${i}`} event={event} color={color} />
-          ))
+        {recentTasks.length > 0 && (
+          <section className="mx-3 mb-3">
+            <div className="hud-section-header">
+              <span>Task History</span>
+              <span className="hud-section-header__count">{recentTasks.length}</span>
+            </div>
+            {recentTasks.map((task) => (
+              <div key={task.id} className="hud-list-card">
+                <div className="hud-list-card__header">
+                  <div className="hud-list-card__title">{task.title}</div>
+                  <span className="hud-list-card__time">{relativeTime(task.updatedAt)} ago</span>
+                </div>
+                <div className="hud-inline-tags">
+                  <span
+                    className="hud-tag"
+                    style={{
+                      borderColor: `${STATUS_COLORS[task.status] ?? color}44`,
+                      color: STATUS_COLORS[task.status] ?? color,
+                    }}
+                  >
+                    {humanizeValue(task.status)}
+                  </span>
+                  <span className="hud-file-chip">{humanizeValue(task.taskType)}</span>
+                </div>
+              </div>
+            ))}
+          </section>
         )}
+
+        <section className="mx-3 mb-3">
+          <div className="hud-section-header">
+            <span>Activity Log</span>
+            <span className="hud-section-header__count">{logEvents.length}</span>
+          </div>
+          {logEvents.length === 0 ? (
+            <p className="hud-empty-state hud-empty-state--compact">No activity recorded for this agent.</p>
+          ) : (
+            logEvents.map((event, index) => (
+              <AgentLogEntry key={`${event.occurredAt}-${index}`} event={event} accent={color} />
+            ))
+          )}
+        </section>
       </div>
-    </div>
+    </aside>
   );
 }
 
@@ -232,17 +248,11 @@ function StatCell({
   color: string;
 }) {
   return (
-    <div
-      className="flex flex-col items-center py-2"
-      style={{ background: "var(--rpg-panel)" }}
-    >
+    <div className="flex flex-col items-center py-2" style={{ background: "var(--rpg-panel)" }}>
       <span className="rpg-mono text-[12px] font-medium" style={{ color }}>
         {value}
       </span>
-      <span
-        className="rpg-mono text-[11px] uppercase tracking-wider mt-0.5"
-        style={{ color: "var(--rpg-text-muted)" }}
-      >
+      <span className="rpg-mono text-[10px] uppercase tracking-wider mt-0.5" style={{ color: "var(--rpg-text-muted)" }}>
         {label}
       </span>
     </div>
@@ -251,123 +261,99 @@ function StatCell({
 
 function AgentLogEntry({
   event,
-  color,
+  accent,
 }: {
   event: SerializedAgentEvent;
-  color: string;
+  accent: string;
 }) {
-  const time = new Date(event.occurredAt).toLocaleTimeString([], {
+  const files = extractChangedFiles(event);
+
+  return (
+    <article className="hud-log-card">
+      <div className="hud-log-card__header">
+        <div className="hud-log-card__meta">
+          <span className="hud-log-card__agent" style={{ color: accent }}>
+            {event.type.replace(/^agent\./, "").replace(/[._-]+/g, " ")}
+          </span>
+          {event.taskId && <span>{event.taskId.slice(0, 8)}</span>}
+        </div>
+        <span className="hud-log-card__time">{formatTime(event.occurredAt)}</span>
+      </div>
+
+      <p className="hud-log-card__summary">{describeAgentEvent(event)}</p>
+
+      {(event.content || event.error) && (
+        <div className={`hud-log-detail ${event.error ? "hud-log-detail--error" : ""}`}>
+          <p>{truncateText(event.error ?? event.content ?? "", 260)}</p>
+        </div>
+      )}
+
+      {files.length > 0 && (
+        <div className="hud-file-list">
+          {files.slice(0, 5).map((file) => (
+            <span key={file} className="hud-file-chip">
+              {file}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {(event.costUsd !== undefined || event.durationMs !== undefined) && (
+        <div className="hud-inline-tags">
+          {event.costUsd !== undefined && <span className="hud-file-chip">${event.costUsd.toFixed(4)}</span>}
+          {event.durationMs !== undefined && (
+            <span className="hud-file-chip">{(event.durationMs / 1000).toFixed(1)}s</span>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function describeAgentEvent(event: SerializedAgentEvent): string {
+  if (event.type === "agent.output.produced") {
+    return truncateText(event.content?.replace(/\s+/g, " ").trim() ?? "Output produced.", 140);
+  }
+
+  if (event.type === "agent.tool.invoked") {
+    const files = extractChangedFiles(event);
+    return files.length > 0
+      ? `${event.toolName ?? "tool"} touched ${files.length} file${files.length === 1 ? "" : "s"}.`
+      : `Invoked ${event.toolName ?? "tool"}.`;
+  }
+
+  if (event.type === "agent.error") {
+    return truncateText(event.error ?? "Execution error.", 140);
+  }
+
+  if (event.type === "agent.turn.completed") {
+    return "Turn completed and reported back to the orchestrator.";
+  }
+
+  return event.type;
+}
+
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60_000) return `${Math.max(1, Math.floor(diff / 1000))}s`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
+  return `${Math.floor(diff / 86_400_000)}d`;
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], {
+    hour12: false,
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
   });
+}
 
-  switch (event.type) {
-    case "agent.output.produced":
-      return (
-        <div className="log-entry">
-          <div className="flex items-center gap-1.5">
-            <span
-              className="rpg-mono text-[11px]"
-              style={{ color: "var(--rpg-text-muted)" }}
-            >
-              {time}
-            </span>
-            <span className="rpg-mono text-[11px]" style={{ color }}>
-              output
-            </span>
-          </div>
-          <div className="log-output">
-            <p className="rpg-mono text-[11px] whitespace-pre-wrap break-words">
-              {event.content}
-            </p>
-          </div>
-        </div>
-      );
-    case "agent.tool.invoked":
-      return (
-        <div className="log-entry">
-          <div className="flex items-center gap-1.5">
-            <span
-              className="rpg-mono text-[11px]"
-              style={{ color: "var(--rpg-text-muted)" }}
-            >
-              {time}
-            </span>
-            <span
-              className="rpg-mono text-[11px]"
-              style={{ color: "var(--rpg-sand)" }}
-            >
-              tool
-            </span>
-          </div>
-          <div className="log-tool">
-            <span className="rpg-mono text-[11px]" style={{ color: "var(--rpg-sand)" }}>
-              {event.toolName}
-            </span>
-          </div>
-        </div>
-      );
-    case "agent.error":
-      return (
-        <div className="log-entry">
-          <div className="flex items-center gap-1.5">
-            <span
-              className="rpg-mono text-[11px]"
-              style={{ color: "var(--rpg-text-muted)" }}
-            >
-              {time}
-            </span>
-            <span
-              className="rpg-mono text-[11px]"
-              style={{ color: "var(--rpg-danger)" }}
-            >
-              error
-            </span>
-          </div>
-          <div className="log-error">
-            <p className="rpg-mono text-[11px]">
-              {event.error?.slice(0, 200)}
-            </p>
-          </div>
-        </div>
-      );
-    case "agent.turn.completed":
-      return (
-        <div className="log-entry">
-          <div className="flex items-center gap-2">
-            <span
-              className="rpg-mono text-[11px]"
-              style={{ color: "var(--rpg-text-muted)" }}
-            >
-              {time}
-            </span>
-            <span
-              className="rpg-mono text-[11px]"
-              style={{ color: "var(--rpg-forest-dark)" }}
-            >
-              turn complete
-            </span>
-            {event.costUsd !== undefined && (
-              <span
-                className="rpg-mono text-[11px]"
-                style={{ color: "var(--rpg-text-muted)" }}
-              >
-                ${event.costUsd.toFixed(4)}
-              </span>
-            )}
-            {event.durationMs !== undefined && (
-              <span
-                className="rpg-mono text-[11px]"
-                style={{ color: "var(--rpg-text-muted)" }}
-              >
-                {(event.durationMs / 1000).toFixed(1)}s
-              </span>
-            )}
-          </div>
-        </div>
-      );
-    default:
-      return null;
-  }
+function truncateText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+}
+
+function humanizeValue(value: string): string {
+  return value.replace(/[_.-]+/g, " ");
 }

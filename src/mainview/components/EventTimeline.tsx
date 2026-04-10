@@ -1,86 +1,192 @@
-import { useRef, useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import type { SerializedEvent } from "../../shared/rpc/rpc-schema";
 import { useConclave } from "../hooks/use-conclave";
 
-const EVENT_COLORS: Record<string, string> = {
-  "task.created": "text-green-400",
-  "task.assigned": "text-blue-400",
-  "task.status-updated": "text-yellow-400",
-  "task.dependency-added": "text-gray-400",
-  "task.dependency-removed": "text-gray-400",
-  "meeting.scheduled": "text-violet-400",
-  "meeting.started": "text-violet-300",
-  "meeting.contribution-added": "text-violet-200",
-  "meeting.completed": "text-violet-500",
-  "meeting.tasks-approved": "text-emerald-400",
+const EVENT_STYLES: Record<string, { accent: string; label: string }> = {
+  TaskCreated: { accent: "var(--rpg-sage)", label: "task" },
+  TaskAssigned: { accent: "var(--rpg-forest)", label: "assignment" },
+  TaskStatusChanged: { accent: "var(--rpg-copper)", label: "status" },
+  MeetingStarted: { accent: "var(--rpg-gold)", label: "meeting" },
+  MeetingCompleted: { accent: "var(--rpg-gold-dim)", label: "meeting" },
+  MeetingContributionAdded: { accent: "var(--rpg-sand)", label: "contribution" },
+  TasksProposedFromMeeting: { accent: "var(--rpg-copper)", label: "proposal" },
+  ProposedTasksApproved: { accent: "var(--rpg-forest-dark)", label: "approval" },
+  "task.created": { accent: "var(--rpg-sage)", label: "task" },
+  "task.assigned": { accent: "var(--rpg-forest)", label: "assignment" },
+  "task.status-updated": { accent: "var(--rpg-copper)", label: "status" },
+  "meeting.started": { accent: "var(--rpg-gold)", label: "meeting" },
+  "meeting.completed": { accent: "var(--rpg-gold-dim)", label: "meeting" },
+  "meeting.contribution-added": { accent: "var(--rpg-sand)", label: "contribution" },
+  "meeting.tasks-approved": { accent: "var(--rpg-forest-dark)", label: "approval" },
 };
 
-function formatPayload(type: string, payload: Record<string, unknown>): string {
-  switch (type) {
-    case "task.created":
-      return `"${payload.title}" (${payload.taskType})${payload.initialStatus === "proposed" ? " [proposed]" : ""}`;
-    case "task.assigned":
-      return `${String(payload.taskId).slice(0, 8)} -> ${payload.agentRole}`;
-    case "task.status-updated":
-      return `${String(payload.taskId).slice(0, 8)}: ${payload.previousStatus} -> ${payload.status}`;
-    case "task.dependency-added":
-      return `${String(payload.taskId).slice(0, 8)} depends on ${String(payload.dependsOn).slice(0, 8)}`;
-    case "meeting.scheduled":
-      return `${payload.meetingType} meeting with ${(payload.participants as string[]).join(", ")}`;
-    case "meeting.started":
-      return `Meeting ${String(payload.meetingId).slice(0, 8)} started`;
-    case "meeting.contribution-added":
-      return `${payload.agentRole} contributed to agenda item ${(payload.agendaItemIndex as number) + 1}`;
-    case "meeting.completed":
-      return `Meeting completed, ${(payload.proposedTaskIds as string[]).length} task(s) proposed`;
-    case "meeting.tasks-approved":
-      return `${(payload.approvedTaskIds as string[]).length} approved, ${(payload.rejectedTaskIds as string[]).length} rejected`;
-    default:
-      return JSON.stringify(payload).slice(0, 80);
-  }
+interface EventTimelineProps {
+  events?: SerializedEvent[];
+  embedded?: boolean;
+  maxItems?: number;
 }
 
-export function EventTimeline() {
-  const { events } = useConclave();
+export function EventTimeline({
+  events: providedEvents,
+  embedded = false,
+  maxItems = 160,
+}: EventTimelineProps) {
+  const { events: storeEvents } = useConclave();
+  const events = providedEvents ?? storeEvents;
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const visibleEvents = useMemo(
+    () => [...events].slice(-maxItems).reverse(),
+    [events, maxItems],
+  );
+
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (!scrollRef.current || visibleEvents.length === 0) {
+      return;
     }
-  }, [events.length]);
+
+    scrollRef.current.scrollTop = 0;
+  }, [visibleEvents.length]);
 
   return (
     <div
       ref={scrollRef}
-      className="h-full overflow-y-auto space-y-1 p-2 font-mono text-xs"
+      className={`min-h-0 ${embedded ? "flex-1" : "h-full"} overflow-y-auto px-3 py-3`}
     >
-      {events.length === 0 ? (
-        <p className="text-gray-600 text-center py-8">
-          No events yet. Create a task to get started.
-        </p>
+      {visibleEvents.length === 0 ? (
+        <p className="hud-empty-state">No events yet. Create a task to start the event log.</p>
       ) : (
-        events.map((event) => (
-          <div
-            key={event.eventId}
-            className="flex items-start gap-2 py-1 px-2 rounded hover:bg-gray-800/40"
-          >
-            <span className="text-gray-600 shrink-0 tabular-nums">
-              #{event.sequence}
-            </span>
-            <span
-              className={`shrink-0 ${EVENT_COLORS[event.type] ?? "text-gray-400"}`}
-            >
-              {event.type}
-            </span>
-            <span className="text-gray-500 truncate">
-              {formatPayload(event.type, event.payload)}
-            </span>
-            <span className="text-gray-700 shrink-0 ml-auto">
-              {new Date(event.occurredAt).toLocaleTimeString()}
-            </span>
-          </div>
-        ))
+        <div className="space-y-2">
+          {visibleEvents.map((event) => {
+            const style = EVENT_STYLES[event.type] ?? {
+              accent: "var(--rpg-text-dim)",
+              label: "event",
+            };
+
+            return (
+              <article key={event.eventId} className="hud-log-card">
+                <div className="hud-log-card__header">
+                  <div className="hud-log-card__meta">
+                    <span className="hud-log-card__agent" style={{ color: style.accent }}>
+                      {style.label}
+                    </span>
+                    <span>{humanizeEventType(event.type)}</span>
+                    <span>#{event.sequence}</span>
+                  </div>
+                  <span className="hud-log-card__time">
+                    {formatAbsoluteTime(event.occurredAt)}
+                  </span>
+                </div>
+
+                <p className="hud-log-card__summary">{describeEvent(event)}</p>
+
+                <div className="hud-inline-tags">
+                  {extractEventChips(event).map((chip) => (
+                    <span key={`${event.eventId}-${chip}`} className="hud-file-chip">
+                      {chip}
+                    </span>
+                  ))}
+                </div>
+              </article>
+            );
+          })}
+        </div>
       )}
     </div>
   );
+}
+
+function describeEvent(event: SerializedEvent): string {
+  const payload = event.payload;
+
+  switch (event.type) {
+    case "TaskCreated":
+    case "task.created":
+      return `"${readString(payload.title) ?? "Untitled"}" created as ${readString(payload.taskType) ?? "task"}.`;
+    case "TaskAssigned":
+    case "task.assigned":
+      return `${shrinkId(payload.taskId)} assigned to ${readString(payload.agentRole) ?? readString(payload.role) ?? "agent"}.`;
+    case "TaskStatusChanged":
+    case "task.status-updated":
+      return `${shrinkId(payload.taskId)} moved ${readString(payload.previousStatus) ?? "unknown"} → ${readString(payload.status) ?? "unknown"}.`;
+    case "MeetingStarted":
+    case "meeting.started":
+      return `${humanizeValue(readString(payload.meetingType) ?? "meeting")} started.`;
+    case "MeetingContributionAdded":
+    case "meeting.contribution-added":
+      return `${readString(payload.agentRole) ?? "Agent"} contributed to agenda item ${readNumber(payload.agendaItemIndex) !== null ? readNumber(payload.agendaItemIndex)! + 1 : "?"}.`;
+    case "MeetingCompleted":
+    case "meeting.completed":
+      return `${humanizeValue(readString(payload.meetingType) ?? "meeting")} completed.`;
+    case "TasksProposedFromMeeting":
+      return `${readStringArray(payload.proposedTaskIds).length} task proposals generated from the meeting.`;
+    case "ProposedTasksApproved":
+    case "meeting.tasks-approved":
+      return `${readStringArray(payload.approvedTaskIds).length} approved, ${readStringArray(payload.rejectedTaskIds).length} rejected.`;
+    default:
+      return compactJson(payload);
+  }
+}
+
+function extractEventChips(event: SerializedEvent): string[] {
+  const payload = event.payload;
+  const chips: string[] = [];
+
+  const title = readString(payload.title);
+  const taskId = readString(payload.taskId);
+  const meetingId = readString(payload.meetingId);
+  const role = readString(payload.agentRole) ?? readString(payload.role);
+  const meetingType = readString(payload.meetingType);
+
+  if (title) chips.push(truncateText(title, 32));
+  if (taskId) chips.push(`task ${shrinkId(taskId)}`);
+  if (meetingId) chips.push(`meeting ${shrinkId(meetingId)}`);
+  if (role) chips.push(role);
+  if (meetingType) chips.push(humanizeValue(meetingType));
+
+  return chips.slice(0, 4);
+}
+
+function humanizeEventType(value: string): string {
+  return value
+    .replace(/\./g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase();
+}
+
+function humanizeValue(value: string): string {
+  return value.replace(/[_.-]+/g, " ");
+}
+
+function formatAbsoluteTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function shrinkId(value: unknown): string {
+  return typeof value === "string" ? value.slice(0, 8) : "unknown";
+}
+
+function truncateText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+}
+
+function compactJson(payload: Record<string, unknown>): string {
+  return truncateText(JSON.stringify(payload), 160);
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
