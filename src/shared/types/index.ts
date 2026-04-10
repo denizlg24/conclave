@@ -16,15 +16,23 @@ export {
   ADAPTER_TYPES,
   ADAPTER_OPTIONS,
   DEFAULT_ADAPTER_TYPE,
+  createDefaultAdapterBinaryPathOverrides,
+  createDefaultAppSettings,
   createDefaultAdapterModelSelections,
   defaultModelForAdapter,
   getAdapterModels,
   isAdapterModel,
   isAdapterType,
+  type AdapterBinaryPathOverrides,
+  type AdapterBinaryResolution,
+  type AdapterBinaryResolutionErrorCode,
+  type AdapterConnectionTestResult,
   type AdapterModelOption,
   type AdapterModelSelections,
   type AdapterOption,
   type AdapterType,
+  type AppSettings,
+  type AppSettingsPatch,
 } from "./adapter";
 
 export {

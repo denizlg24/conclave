@@ -20,6 +20,44 @@ export interface AdapterOption {
 export const DEFAULT_ADAPTER_TYPE: AdapterType = "claude-code";
 
 export type AdapterModelSelections = Record<AdapterType, string>;
+export type AdapterBinaryPathOverrides = Record<AdapterType, string | null>;
+
+export interface AppSettings {
+  readonly selectedAdapter: AdapterType;
+  readonly selectedModels: AdapterModelSelections;
+  readonly adapterBinaryPaths: AdapterBinaryPathOverrides;
+}
+
+export interface AppSettingsPatch {
+  readonly selectedAdapter?: AdapterType;
+  readonly selectedModels?: Partial<AdapterModelSelections>;
+  readonly adapterBinaryPaths?: Partial<AdapterBinaryPathOverrides>;
+}
+
+export type AdapterBinaryResolutionErrorCode =
+  | "manual_override_not_found"
+  | "binary_not_found";
+
+export interface AdapterBinaryResolution {
+  readonly adapterType: AdapterType;
+  readonly command: string;
+  readonly manualPath: string | null;
+  readonly resolvedPath: string | null;
+  readonly source: "manual" | "detected" | null;
+  readonly errorCode: AdapterBinaryResolutionErrorCode | null;
+  readonly errorMessage: string | null;
+}
+
+export interface AdapterConnectionTestResult {
+  readonly adapterType: AdapterType;
+  readonly ok: boolean;
+  readonly message: string;
+  readonly resolution: AdapterBinaryResolution;
+  readonly exitCode: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly durationMs: number;
+}
 
 const ADAPTER_OPTION_MAP = {
   "claude-code": {
@@ -74,6 +112,21 @@ export function createDefaultAdapterModelSelections(): AdapterModelSelections {
   return {
     "claude-code": defaultModelForAdapter("claude-code"),
     "openai-codex": defaultModelForAdapter("openai-codex"),
+  };
+}
+
+export function createDefaultAdapterBinaryPathOverrides(): AdapterBinaryPathOverrides {
+  return {
+    "claude-code": null,
+    "openai-codex": null,
+  };
+}
+
+export function createDefaultAppSettings(): AppSettings {
+  return {
+    selectedAdapter: DEFAULT_ADAPTER_TYPE,
+    selectedModels: createDefaultAdapterModelSelections(),
+    adapterBinaryPaths: createDefaultAdapterBinaryPathOverrides(),
   };
 }
 

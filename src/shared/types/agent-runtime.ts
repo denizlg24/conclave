@@ -35,6 +35,22 @@ export const TokenUsage = Schema.Struct({
 });
 export type TokenUsage = typeof TokenUsage.Type;
 
+export const WorkspaceChangePath = TrimmedNonEmptyString;
+export type WorkspaceChangePath = typeof WorkspaceChangePath.Type;
+
+export const WorkspaceChangeSource = Schema.Literals(["git", "filesystem"]);
+export type WorkspaceChangeSource = typeof WorkspaceChangeSource.Type;
+
+export const WorkspaceChanges = Schema.Struct({
+  source: WorkspaceChangeSource,
+  added: Schema.Array(WorkspaceChangePath),
+  modified: Schema.Array(WorkspaceChangePath),
+  deleted: Schema.Array(WorkspaceChangePath),
+  truncated: Schema.Boolean,
+  totalCount: NonNegativeInt,
+});
+export type WorkspaceChanges = typeof WorkspaceChanges.Type;
+
 // ---------------------------------------------------------------------------
 // Claude Code raw event types (from --output-format stream-json --verbose)
 // ---------------------------------------------------------------------------
@@ -154,7 +170,9 @@ export const AgentTurnCompleted = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   agentId: AgentId,
   sessionId: Schema.String,
+  taskId: Schema.NullOr(TaskId),
   usage: TokenUsage,
+  workspaceChanges: WorkspaceChanges,
   durationMs: NonNegativeInt,
   costUsd: Schema.Number,
   occurredAt: IsoDateTime,

@@ -4,26 +4,30 @@ if (!process.env.HOME && process.env.USERPROFILE) {
   process.env.HOME = process.env.USERPROFILE;
 }
 
+import { join } from "node:path";
 import { BrowserView, BrowserWindow, Updater, Utils } from "electrobun/bun";
 import type {
   ConclaveRPCSchema,
   SerializedAgentEvent,
+  SerializedAppSettings,
+  SerializedAdapterConnectionTestResult,
+  SerializedAdapterState,
   SerializedDebugConsoleEntry,
 } from "../shared/rpc/rpc-schema";
 import { bootstrapConclave, type ConclaveShape } from "./conclave";
+import { serializeAppSettings } from "./app-settings-rpc";
+import { createAppSettingsStore } from "./app-settings-store";
 import {
   createProjectManager,
   type ProjectMeta,
 } from "../core/project/project-manager";
 import {
   ADAPTER_OPTIONS,
-  DEFAULT_ADAPTER_TYPE,
-  createDefaultAdapterModelSelections,
   defaultModelForAdapter,
-  isAdapterModel,
-  isAdapterType,
   type AdapterType,
 } from "../shared/types/adapter";
+import type { AgentRuntimeEvent } from "../shared/types/agent-runtime";
+import { resolveAdapterBinaryPath } from "../core/agents/binary-path";
 import { createDebugConsoleEntry } from "../shared/utils/debug-console";
 import type { DebugConsoleLevel } from "../shared/types/debug-console";
 
@@ -47,10 +51,13 @@ async function getMainViewUrl(): Promise<string> {
 }
 
 const projectManager = createProjectManager();
+const appSettingsFilePath = join(Utils.paths.userData, "settings.json");
+const appSettingsStore = createAppSettingsStore({
+  settingsFilePath: appSettingsFilePath,
+});
+let appSettings = await appSettingsStore.get();
 let conclave: ConclaveShape | null = null;
 let activeProject: ProjectMeta | null = null;
-let selectedAdapter: AdapterType = DEFAULT_ADAPTER_TYPE;
-let selectedModels = createDefaultAdapterModelSelections();
 // Lazy reference — set after BrowserWindow is created so push callbacks
 // always target the current webview, even after page refreshes.
 let getWebviewRpc: (() => ReturnType<typeof BrowserView.defineRPC<ConclaveRPCSchema>> | null) | null = null;
@@ -135,26 +142,155 @@ function sendToWebview(
 
 installConsoleMirror();
 
-function serializeAgentEvent(event: {
-  type: string;
-  agentId: string;
-  sessionId: string;
-  occurredAt: string;
-  [key: string]: unknown;
-}): SerializedAgentEvent {
+function createSerializedAdapterState(): SerializedAdapterState {
+  return {
+    selectedAdapter: appSettings.selectedAdapter,
+    availableAdapters: [...ADAPTER_OPTIONS],
+    selectedModels: { ...appSettings.selectedModels },
+  };
+}
+
+async function getSerializedAppSettings(): Promise<SerializedAppSettings> {
+  return serializeAppSettings({
+    appSettings,
+    settingsFilePath: appSettingsFilePath,
+    resolveAdapterBinaryPath: (adapterType, manualPath) =>
+      resolveAdapterBinaryPath({
+        adapterType,
+        manualPath,
+      }),
+  });
+}
+
+async function updateAppSettingsState(
+  patch: Parameters<typeof appSettingsStore.update>[0],
+): Promise<SerializedAppSettings> {
+  appSettings = await appSettingsStore.update(patch);
+  return getSerializedAppSettings();
+}
+
+async function resolveCurrentAdapterBinaryPath(
+  adapterType: AdapterType,
+) {
+  return resolveAdapterBinaryPath({
+    adapterType,
+    manualPath: appSettings.adapterBinaryPaths[adapterType],
+  });
+}
+
+function createSpawnEnv(): Record<string, string> {
+  const spawnEnv = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      spawnEnv[key] = value;
+    }
+  }
+  if (!spawnEnv.HOME && spawnEnv.USERPROFILE) {
+    spawnEnv.HOME = spawnEnv.USERPROFILE;
+  }
+  if (!spawnEnv.PATH && spawnEnv.Path) {
+    spawnEnv.PATH = spawnEnv.Path;
+  }
+  return spawnEnv;
+}
+
+const ADAPTER_CONNECTION_TEST_ARGS: Record<AdapterType, string[]> = {
+  "claude-code": ["--version"],
+  "openai-codex": ["--version"],
+};
+
+async function testAdapterConnection(
+  adapterType: AdapterType,
+): Promise<SerializedAdapterConnectionTestResult> {
+  const resolution = await resolveCurrentAdapterBinaryPath(adapterType);
+
+  if (!resolution.resolvedPath) {
+    return {
+      adapterType,
+      ok: false,
+      message: resolution.errorMessage ?? "Adapter binary could not be resolved.",
+      resolution,
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      durationMs: 0,
+    };
+  }
+
+  const startedAt = Date.now();
+
+  try {
+    const proc = Bun.spawn([resolution.resolvedPath, ...ADAPTER_CONNECTION_TEST_ARGS[adapterType]], {
+      cwd: Utils.paths.userData,
+      env: createSpawnEnv(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+      new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+    ]);
+
+    return {
+      adapterType,
+      ok: exitCode === 0,
+      message:
+        exitCode === 0
+          ? "Adapter binary launched successfully."
+          : `Adapter binary exited with code ${exitCode}.`,
+      resolution,
+      exitCode,
+      stdout,
+      stderr,
+      durationMs: Math.max(Date.now() - startedAt, 0),
+    };
+  } catch (error) {
+    return {
+      adapterType,
+      ok: false,
+      message: `Failed to launch adapter binary: ${String(error)}`,
+      resolution,
+      exitCode: null,
+      stdout: "",
+      stderr: String(error),
+      durationMs: Math.max(Date.now() - startedAt, 0),
+    };
+  }
+}
+
+function serializeAgentEvent(event: AgentRuntimeEvent): SerializedAgentEvent {
   return {
     type: event.type,
     agentId: event.agentId,
-    sessionId: event.sessionId,
+    sessionId: "sessionId" in event ? event.sessionId : "",
     occurredAt: event.occurredAt,
-    content: event.content as string | undefined,
-    toolName: event.toolName as string | undefined,
-    toolInput: event.toolInput,
-    taskId: event.taskId as string | null | undefined,
-    error: event.error as string | undefined,
-    usage: event.usage as { inputTokens: number; outputTokens: number } | undefined,
-    costUsd: event.costUsd as number | undefined,
-    durationMs: event.durationMs as number | undefined,
+    content: "content" in event ? event.content : undefined,
+    toolName: "toolName" in event ? event.toolName : undefined,
+    toolInput: "toolInput" in event ? event.toolInput : undefined,
+    taskId: "taskId" in event ? event.taskId : undefined,
+    error: "error" in event ? event.error : undefined,
+    usage:
+      "usage" in event
+        ? {
+            inputTokens: event.usage.inputTokens,
+            outputTokens: event.usage.outputTokens,
+          }
+        : undefined,
+    workspaceChanges:
+      "workspaceChanges" in event
+        ? {
+            source: event.workspaceChanges.source,
+            added: [...event.workspaceChanges.added],
+            modified: [...event.workspaceChanges.modified],
+            deleted: [...event.workspaceChanges.deleted],
+            truncated: event.workspaceChanges.truncated,
+            totalCount: event.workspaceChanges.totalCount,
+          }
+        : undefined,
+    costUsd: "costUsd" in event ? event.costUsd : undefined,
+    durationMs: "durationMs" in event ? event.durationMs : undefined,
   };
 }
 
@@ -172,8 +308,10 @@ async function loadProjectAndBootstrap(
   console.log(`Loading project: ${project.name} (${project.path})`);
   conclave = await bootstrapConclave(
     project.path,
-    selectedAdapter,
-    selectedModels[selectedAdapter] ?? defaultModelForAdapter(selectedAdapter),
+    appSettings.selectedAdapter,
+    appSettings.selectedModels[appSettings.selectedAdapter] ??
+      defaultModelForAdapter(appSettings.selectedAdapter),
+    resolveCurrentAdapterBinaryPath,
   );
   console.log("Conclave orchestration system initialized.");
 
@@ -239,41 +377,28 @@ const rpc = BrowserView.defineRPC<ConclaveRPCSchema>({
         return Promise.resolve(activeProject);
       },
       getAdapterState: () => {
-        return Promise.resolve({
-          selectedAdapter,
-          availableAdapters: [...ADAPTER_OPTIONS],
-          selectedModels: { ...selectedModels },
-        });
+        return Promise.resolve(createSerializedAdapterState());
       },
-      setAdapter: ({ adapterType }) => {
-        if (!isAdapterType(adapterType)) {
-          throw new Error(`Unsupported adapter '${adapterType}'`);
-        }
-        selectedAdapter = adapterType;
-        return Promise.resolve({
-          selectedAdapter,
-          availableAdapters: [...ADAPTER_OPTIONS],
-          selectedModels: { ...selectedModels },
-        });
+      getAppSettings: async () => {
+        return getSerializedAppSettings();
       },
-      setAdapterModel: ({ adapterType, model }) => {
-        if (!isAdapterType(adapterType)) {
-          throw new Error(`Unsupported adapter '${adapterType}'`);
-        }
-        if (!isAdapterModel(adapterType, model)) {
-          throw new Error(
-            `Unsupported model '${model}' for adapter '${adapterType}'`,
-          );
-        }
-        selectedModels = {
-          ...selectedModels,
-          [adapterType]: model,
-        };
-        return Promise.resolve({
-          selectedAdapter,
-          availableAdapters: [...ADAPTER_OPTIONS],
-          selectedModels: { ...selectedModels },
+      setAdapter: async ({ adapterType }) => {
+        await updateAppSettingsState({ selectedAdapter: adapterType });
+        return createSerializedAdapterState();
+      },
+      setAdapterModel: async ({ adapterType, model }) => {
+        await updateAppSettingsState({
+          selectedModels: {
+            [adapterType]: model,
+          },
         });
+        return createSerializedAdapterState();
+      },
+      updateAppSettings: (patch) => {
+        return updateAppSettingsState(patch);
+      },
+      testAdapterConnection: ({ adapterType }) => {
+        return testAdapterConnection(adapterType);
       },
       getDebugConsoleEntries: () => Promise.resolve([...debugConsoleEntries]),
       getAgentRoster: () => {
@@ -359,6 +484,11 @@ const mainWindow = new BrowserWindow({
 // Wire up the lazy RPC getter now that mainWindow exists
 getWebviewRpc = () => mainWindow.webview.rpc ?? null;
 
+mainWindow.webview.on("dom-ready", () => {
+  void forceMainWindowRelayout();
+  triggerOneTimeInitialViewReload();
+});
+
 async function forceMainWindowRelayout(): Promise<void> {
   if (process.platform !== "win32") {
     return;
@@ -378,6 +508,24 @@ async function forceMainWindowRelayout(): Promise<void> {
       window.dispatchEvent(new Event("resize"));
       window.visualViewport?.dispatchEvent?.(new Event("resize"));
     });
+  `);
+}
+
+function triggerOneTimeInitialViewReload(): void {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  mainWindow.webview.executeJavascript(`
+    (() => {
+      const key = "conclave-initial-layout-reloaded-v1";
+      if (window.sessionStorage.getItem(key)) {
+        return;
+      }
+
+      window.sessionStorage.setItem(key, "1");
+      window.location.reload();
+    })();
   `);
 }
 

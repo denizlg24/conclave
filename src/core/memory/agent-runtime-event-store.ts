@@ -6,6 +6,11 @@ import type { AgentRuntimeEvent } from "@/shared/types/agent-runtime";
 
 const AGENT_EVENTS_FILE = "agent-events.ndjson";
 
+type AgentTurnCompletedEvent = Extract<
+  AgentRuntimeEvent,
+  { type: "agent.turn.completed" }
+>;
+
 export interface AgentRuntimeEventStoreOptions {
   readonly storagePath: string;
 }
@@ -13,6 +18,9 @@ export interface AgentRuntimeEventStoreOptions {
 export interface AgentRuntimeEventStoreShape {
   readonly append: (event: AgentRuntimeEvent) => Effect.Effect<void>;
   readonly readAll: () => Effect.Effect<ReadonlyArray<AgentRuntimeEvent>>;
+  readonly findLatestTurnCompleted: (
+    taskId: string,
+  ) => Effect.Effect<AgentTurnCompletedEvent | null>;
 }
 
 function ensureDir(dir: string): void {
@@ -63,9 +71,28 @@ export function createAgentRuntimeEventStore(
     const readAll: AgentRuntimeEventStoreShape["readAll"] = () =>
       Ref.get(eventsRef);
 
+    const findLatestTurnCompleted: AgentRuntimeEventStoreShape["findLatestTurnCompleted"] = (
+      taskId,
+    ) =>
+      Ref.get(eventsRef).pipe(
+        Effect.map((events) => {
+          for (let index = events.length - 1; index >= 0; index -= 1) {
+            const event = events[index];
+            if (
+              event?.type === "agent.turn.completed" &&
+              event.taskId === taskId
+            ) {
+              return event;
+            }
+          }
+          return null;
+        }),
+      );
+
     return {
       append,
       readAll,
+      findLatestTurnCompleted,
     } satisfies AgentRuntimeEventStoreShape;
   });
 }

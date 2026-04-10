@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import type { WorkspaceChanges } from "@/shared/types/agent-runtime";
+
 /**
  * Manages the .conclave/reviews/ directory structure for file-based context handoff
  * during review meetings. This reduces token usage by having agents read/write files
@@ -22,7 +24,7 @@ export interface WorkSummary {
   readonly title: string;
   readonly status: "done" | "failed";
   readonly output: string;
-  readonly filesModified?: string[];
+  readonly workspaceChanges?: WorkspaceChanges;
 }
 
 export interface ReviewFilesShape {
@@ -126,12 +128,20 @@ export function createReviewFiles(): ReviewFilesShape {
       "",
       summary.output || "(No output provided)",
       "",
-      ...(summary.filesModified?.length
+      ...(summary.workspaceChanges &&
+      summary.workspaceChanges.totalCount > 0
         ? [
-            "## Files Modified",
+            "## Workspace Changes",
             "",
-            ...summary.filesModified.map((f) => `- ${f}`),
-            "",
+            ...([
+              ["Added", summary.workspaceChanges.added],
+              ["Modified", summary.workspaceChanges.modified],
+              ["Deleted", summary.workspaceChanges.deleted],
+            ] as const).flatMap(([label, paths]) =>
+              paths.length > 0
+                ? [`### ${label}`, "", ...paths.map((path) => `- ${path}`), ""]
+                : [],
+            ),
           ]
         : []),
     ].join("\n");
@@ -162,15 +172,65 @@ export function createReviewFiles(): ReviewFilesShape {
       const roleMatch = content.match(/\*\*Role:\*\* (.+)$/m);
       const statusMatch = content.match(/\*\*Status:\*\* (done|failed)$/m);
       const outputMatch = content.match(/## Output\s+(.+?)(?=\n## |$)/s);
+      const workspaceChangesMatch = content.match(
+        /## Workspace Changes\s+([\s\S]+?)(?=\n## |$)/,
+      );
       const filesMatch = content.match(/## Files Modified\s+([\s\S]+?)(?=\n## |$)/);
 
       if (taskIdMatch && roleMatch && statusMatch) {
-        const filesModified = filesMatch
-          ? filesMatch[1]
+        const workspaceChanges = (() => {
+          if (workspaceChangesMatch) {
+            const extractSection = (label: string): string[] => {
+              const section = workspaceChangesMatch[1].match(
+                new RegExp(`### ${label}\\s+([\\s\\S]+?)(?=\\n### |$)`),
+              );
+              if (!section) {
+                return [];
+              }
+
+              return section[1]
+                .split("\n")
+                .filter((line) => line.startsWith("- "))
+                .map((line) => line.slice(2).trim());
+            };
+
+            const added = extractSection("Added");
+            const modified = extractSection("Modified");
+            const deleted = extractSection("Deleted");
+            const totalCount = added.length + modified.length + deleted.length;
+
+            return totalCount > 0
+              ? {
+                  source: "filesystem" as const,
+                  added,
+                  modified,
+                  deleted,
+                  truncated: false,
+                  totalCount,
+                }
+              : undefined;
+          }
+
+          if (filesMatch) {
+            const modified = filesMatch[1]
               .split("\n")
               .filter((line) => line.startsWith("- "))
-              .map((line) => line.slice(2).trim())
-          : undefined;
+              .map((line) => line.slice(2).trim());
+
+            return modified.length > 0
+              ? {
+                  source: "filesystem" as const,
+                  added: [],
+                  modified,
+                  deleted: [],
+                  truncated: false,
+                  totalCount: modified.length,
+                }
+              : undefined;
+          }
+
+          return undefined;
+        })();
 
         summaries.push({
           taskId: taskIdMatch[1],
@@ -178,7 +238,7 @@ export function createReviewFiles(): ReviewFilesShape {
           title: titleMatch?.[1] ?? "Unknown",
           status: statusMatch[1] as "done" | "failed",
           output: outputMatch?.[1]?.trim() ?? "",
-          filesModified,
+          workspaceChanges,
         });
       }
     }

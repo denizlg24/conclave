@@ -1,13 +1,21 @@
 import { Effect, Queue, Ref, Stream } from "effect";
 
-import type { AgentId } from "@/shared/types/base-schemas";
+import type { AgentId, TaskId } from "@/shared/types/base-schemas";
 import type {
   AgentRoleConfig,
   AgentRuntimeEvent,
   TokenUsage,
+  WorkspaceChanges,
 } from "@/shared/types/agent-runtime";
 
-import type { AgentAdapterShape, AgentSession, QuotaExhaustedDetector, QuotaExhaustedCheckResult } from "./adapter";
+import type {
+  AdapterBinaryPathResolver,
+  AgentAdapterShape,
+  AgentSession,
+  QuotaExhaustedCheckResult,
+  QuotaExhaustedDetector,
+} from "./adapter";
+import { resolveAdapterBinaryPath } from "./binary-path";
 import {
   AgentAdapterError,
   AgentBudgetExceededError,
@@ -15,6 +23,10 @@ import {
   AgentSpawnError,
   AgentQuotaExhaustedError,
 } from "./errors";
+import {
+  createWorkspaceChangeTracker,
+  EMPTY_WORKSPACE_CHANGES,
+} from "./workspace-change-tracker";
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -31,7 +43,18 @@ const ZERO_USAGE: TokenUsage = {
   cacheReadInputTokens: 0,
 };
 
+type CompletedTurn = {
+  readonly sessionId: string;
+  readonly usage: TokenUsage;
+  readonly durationMs: number;
+  readonly costUsd: number;
+};
+
 const nowIso = () => new Date().toISOString();
+
+export interface ClaudeCodeAdapterOptions {
+  readonly resolveBinaryPath?: AdapterBinaryPathResolver;
+}
 
 // ---------------------------------------------------------------------------
 // Claude Code Quota Exhausted Detector
@@ -253,7 +276,25 @@ async function* readNdjsonLines(
 // Claude Code Adapter implementation
 // ---------------------------------------------------------------------------
 
-export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
+function createSpawnEnv(): Record<string, string> {
+  const spawnEnv = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      spawnEnv[key] = value;
+    }
+  }
+  if (!spawnEnv.HOME && spawnEnv.USERPROFILE) {
+    spawnEnv.HOME = spawnEnv.USERPROFILE;
+  }
+  if (!spawnEnv.PATH && spawnEnv.Path) {
+    spawnEnv.PATH = spawnEnv.Path;
+  }
+  return spawnEnv;
+}
+
+export function createClaudeCodeAdapter(
+  options: ClaudeCodeAdapterOptions = {},
+): Effect.Effect<AgentAdapterShape> {
   return Effect.gen(function* () {
     const sessionsRef = yield* Ref.make<Map<string, ManagedSession>>(
       new Map(),
@@ -297,29 +338,48 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
       agentId: AgentId,
       config: AgentRoleConfig,
       prompt: string,
+      taskId: TaskId | null,
       resumeSessionId: string | null,
     ): Effect.Effect<string, AgentAdapterError | AgentSpawnError | AgentQuotaExhaustedError> =>
       Effect.gen(function* () {
         const args = buildClaudeArgs(config, resumeSessionId);
+        const resolution = yield* Effect.tryPromise({
+          try: () =>
+            options.resolveBinaryPath?.() ??
+            resolveAdapterBinaryPath({
+              adapterType: "claude-code",
+              manualPath: null,
+              cwd: config.workingDirectory,
+            }),
+          catch: (err) =>
+            new AgentSpawnError({
+              agentId,
+              command: "claude",
+              detail: String(err),
+            }),
+        });
+
+        if (!resolution.resolvedPath) {
+          return yield* Effect.fail(
+            new AgentSpawnError({
+              agentId,
+              command: resolution.manualPath ?? resolution.command,
+              detail: resolution.errorMessage ?? "Claude binary could not be resolved.",
+            }),
+          );
+        }
+        const resolvedPath = resolution.resolvedPath;
 
         console.log(`[claude-adapter] HOME=${process.env.HOME}, USERPROFILE=${process.env.USERPROFILE}`);
-        console.log(`[claude-adapter] Spawning claude (cwd: ${config.workingDirectory}), promptLength: ${prompt.length}`);
+        console.log(
+          `[claude-adapter] Spawning ${resolvedPath} (${resolution.source ?? "unresolved"}) (cwd: ${config.workingDirectory}), promptLength: ${prompt.length}`,
+        );
 
-        const spawnEnv = Object.create(null) as Record<string, string>;
-        for (const [k, v] of Object.entries(process.env)) {
-          if (v !== undefined) spawnEnv[k] = v;
-        }
-        if (!spawnEnv.HOME && spawnEnv.USERPROFILE) {
-          spawnEnv.HOME = spawnEnv.USERPROFILE;
-        }
-
-        if (!spawnEnv.PATH && spawnEnv.Path) {
-          spawnEnv.PATH = spawnEnv.Path;
-        }
+        const spawnEnv = createSpawnEnv();
 
         const proc = yield* Effect.try({
           try: () =>
-            Bun.spawn(["claude", ...args], {
+            Bun.spawn([resolvedPath, ...args], {
               cwd: config.workingDirectory,
               env: spawnEnv,
               stdout: "pipe",
@@ -330,7 +390,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
             console.error(`[claude-adapter] Spawn failed for ${agentId}:`, String(err));
             return new AgentSpawnError({
               agentId,
-              command: `claude ${args.join(" ")}`,
+              command: `${resolvedPath} ${args.join(" ")}`,
               detail: String(err),
             });
           },
@@ -365,6 +425,20 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
           try: async () => {
             let resultText = "";
             let detectedSessionId = resumeSessionId ?? "";
+            let completedTurn: CompletedTurn | null = null;
+            let errorText: string | null = null;
+            let tracker = await createWorkspaceChangeTracker(
+              config.workingDirectory,
+            ).catch(() => null);
+            const finishTracking = async (): Promise<WorkspaceChanges> => {
+              if (!tracker) {
+                return EMPTY_WORKSPACE_CHANGES;
+              }
+
+              const activeTracker = tracker;
+              tracker = null;
+              return activeTracker.finish().catch(() => EMPTY_WORKSPACE_CHANGES);
+            };
 
             for await (const line of readNdjsonLines(stdout)) {
               const parsed = parseRawLine(line);
@@ -421,6 +495,13 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
 
                 case "result": {
                   resultText = parsed.result;
+                  completedTurn = {
+                    sessionId: detectedSessionId,
+                    usage: parsed.usage,
+                    durationMs: parsed.durationMs,
+                    costUsd: parsed.costUsd,
+                  };
+                  errorText = parsed.isError ? parsed.result : null;
 
                   Effect.runSync(
                     Effect.gen(function* () {
@@ -439,28 +520,6 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
                           process: null,
                         });
                       }
-
-                      yield* emit({
-                        type: "agent.turn.completed",
-                        schemaVersion: 1 as const,
-                        agentId,
-                        sessionId: detectedSessionId,
-                        usage: parsed.usage,
-                        durationMs: parsed.durationMs,
-                        costUsd: parsed.costUsd,
-                        occurredAt: nowIso(),
-                      });
-
-                      if (parsed.isError) {
-                        yield* emit({
-                          type: "agent.error",
-                          schemaVersion: 1 as const,
-                          agentId,
-                          sessionId: detectedSessionId,
-                          error: parsed.result,
-                          occurredAt: nowIso(),
-                        });
-                      }
                     }),
                   );
                   break;
@@ -473,6 +532,37 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
 
             const exitCode = await proc.exited;
             console.log(`[claude-adapter] Process exited for ${agentId}, code: ${exitCode}, resultLength: ${resultText.length}`);
+            const workspaceChanges = await finishTracking();
+
+            if (completedTurn) {
+              Effect.runSync(
+                emit({
+                  type: "agent.turn.completed",
+                  schemaVersion: 1 as const,
+                  agentId,
+                  sessionId: completedTurn.sessionId,
+                  taskId,
+                  usage: completedTurn.usage,
+                  workspaceChanges,
+                  durationMs: completedTurn.durationMs,
+                  costUsd: completedTurn.costUsd,
+                  occurredAt: nowIso(),
+                }),
+              );
+            }
+
+            if (errorText) {
+              Effect.runSync(
+                emit({
+                  type: "agent.error",
+                  schemaVersion: 1 as const,
+                  agentId,
+                  sessionId: detectedSessionId,
+                  error: errorText,
+                  occurredAt: nowIso(),
+                }),
+              );
+            }
 
             if (exitCode !== 0 && !resultText) {
               const stderrText = await new Response(stderr).text();
@@ -637,6 +727,7 @@ export function createClaudeCodeAdapter(): Effect.Effect<AgentAdapterShape> {
           agentId,
           session.config,
           prompt,
+          taskId,
           resumeId,
         );
 

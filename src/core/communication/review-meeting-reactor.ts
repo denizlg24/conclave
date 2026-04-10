@@ -11,6 +11,7 @@ import type { OrchestrationEngineShape } from "../orchestrator/engine";
 import type { EventBusShape } from "./event-bus";
 import type { ReceiptStoreShape } from "./receipt-store";
 import type { MeetingOrchestratorShape } from "../meetings/meeting-orchestrator";
+import type { AgentRuntimeEventStoreShape } from "../memory/agent-runtime-event-store";
 import { createReviewFiles } from "./review-files";
 import { MeetingError } from "./errors";
 
@@ -41,8 +42,16 @@ export function createReviewMeetingReactor(deps: {
   readonly receiptStore: ReceiptStoreShape;
   readonly meetingOrchestrator: MeetingOrchestratorShape;
   readonly projectPath: string;
+  readonly agentRuntimeEventStore: AgentRuntimeEventStoreShape;
 }): Effect.Effect<Fiber.Fiber<void>, never, Scope.Scope> {
-  const { engine, bus, receiptStore, meetingOrchestrator, projectPath } = deps;
+  const {
+    engine,
+    bus,
+    receiptStore,
+    meetingOrchestrator,
+    projectPath,
+    agentRuntimeEventStore,
+  } = deps;
   const reviewFiles = createReviewFiles();
 
   const reviewedGroups = new Set<string>();
@@ -75,6 +84,9 @@ export function createReviewMeetingReactor(deps: {
         typeof task.output === "string"
           ? task.output
           : JSON.stringify(task.output ?? "", null, 2);
+      const latestTurn = yield* agentRuntimeEventStore.findLatestTurnCompleted(
+        task.id,
+      );
       try {
         reviewFiles.writeWorkSummary(projectPath, parentPlanningTaskId, {
           taskId: task.id,
@@ -82,6 +94,7 @@ export function createReviewMeetingReactor(deps: {
           title: task.title,
           status: task.status as "done" | "failed",
           output: taskOutput,
+          workspaceChanges: latestTurn?.workspaceChanges,
         });
         console.log(`[${REACTOR_NAME}] Wrote work summary for task ${task.id}`);
       } catch (err) {

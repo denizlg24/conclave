@@ -1,18 +1,21 @@
 import { Effect, Queue, Ref, Stream } from "effect";
 
-import type { AgentId } from "@/shared/types/base-schemas";
+import type { AgentId, TaskId } from "@/shared/types/base-schemas";
 import type {
   AgentRoleConfig,
   AgentRuntimeEvent,
   TokenUsage,
+  WorkspaceChanges,
 } from "@/shared/types/agent-runtime";
 
 import type {
+  AdapterBinaryPathResolver,
   AgentAdapterShape,
   AgentSession,
   QuotaExhaustedCheckResult,
   QuotaExhaustedDetector,
 } from "./adapter";
+import { resolveAdapterBinaryPath } from "./binary-path";
 import {
   AgentAdapterError,
   AgentBudgetExceededError,
@@ -20,6 +23,10 @@ import {
   AgentSessionNotFoundError,
   AgentSpawnError,
 } from "./errors";
+import {
+  createWorkspaceChangeTracker,
+  EMPTY_WORKSPACE_CHANGES,
+} from "./workspace-change-tracker";
 
 interface ManagedSession extends AgentSession {
   readonly process: { kill: (signal?: number) => void } | null;
@@ -32,7 +39,18 @@ const ZERO_USAGE: TokenUsage = {
   cacheReadInputTokens: 0,
 };
 
+type CompletedTurn = {
+  readonly sessionId: string;
+  readonly usage: TokenUsage;
+  readonly durationMs: number;
+  readonly costUsd: number;
+};
+
 const nowIso = () => new Date().toISOString();
+
+export interface OpenAICodexAdapterOptions {
+  readonly resolveBinaryPath?: AdapterBinaryPathResolver;
+}
 
 const CODEX_QUOTA_PATTERNS: readonly RegExp[] = [
   /quota exceeded/i,
@@ -292,7 +310,25 @@ async function* readJsonLines(
   }
 }
 
-export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
+function createSpawnEnv(): Record<string, string> {
+  const spawnEnv = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      spawnEnv[key] = value;
+    }
+  }
+  if (!spawnEnv.HOME && spawnEnv.USERPROFILE) {
+    spawnEnv.HOME = spawnEnv.USERPROFILE;
+  }
+  if (!spawnEnv.PATH && spawnEnv.Path) {
+    spawnEnv.PATH = spawnEnv.Path;
+  }
+  return spawnEnv;
+}
+
+export function createOpenAICodexAdapter(
+  options: OpenAICodexAdapterOptions = {},
+): Effect.Effect<AgentAdapterShape> {
   return Effect.gen(function* () {
     const sessionsRef = yield* Ref.make<Map<string, ManagedSession>>(new Map());
     const eventQueue = yield* Queue.unbounded<AgentRuntimeEvent>();
@@ -330,6 +366,7 @@ export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
       agentId: AgentId,
       config: AgentRoleConfig,
       prompt: string,
+      taskId: TaskId | null,
       resumeSessionId: string | null,
     ): Effect.Effect<
       string,
@@ -339,26 +376,41 @@ export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
         const args = buildCodexArgs(config, resumeSessionId);
         const fullPrompt = buildPrompt(config, prompt, resumeSessionId);
         const startedAtMs = Date.now();
+        const resolution = yield* Effect.tryPromise({
+          try: () =>
+            options.resolveBinaryPath?.() ??
+            resolveAdapterBinaryPath({
+              adapterType: "openai-codex",
+              manualPath: null,
+              cwd: config.workingDirectory,
+            }),
+          catch: (err) =>
+            new AgentSpawnError({
+              agentId,
+              command: "codex",
+              detail: String(err),
+            }),
+        });
+
+        if (!resolution.resolvedPath) {
+          return yield* Effect.fail(
+            new AgentSpawnError({
+              agentId,
+              command: resolution.manualPath ?? resolution.command,
+              detail: resolution.errorMessage ?? "Codex binary could not be resolved.",
+            }),
+          );
+        }
+        const resolvedPath = resolution.resolvedPath;
 
         console.log(
-          `[codex-adapter] Spawning codex (cwd: ${config.workingDirectory}), promptLength: ${fullPrompt.length}`,
+          `[codex-adapter] Spawning ${resolvedPath} (${resolution.source ?? "unresolved"}) (cwd: ${config.workingDirectory}), promptLength: ${fullPrompt.length}`,
         );
 
-        const spawnEnv = Object.create(null) as Record<string, string>;
-        for (const [key, value] of Object.entries(process.env)) {
-          if (value !== undefined) {
-            spawnEnv[key] = value;
-          }
-        }
-        if (!spawnEnv.HOME && spawnEnv.USERPROFILE) {
-          spawnEnv.HOME = spawnEnv.USERPROFILE;
-        }
-        if (!spawnEnv.PATH && spawnEnv.Path) {
-          spawnEnv.PATH = spawnEnv.Path;
-        }
+        const spawnEnv = createSpawnEnv();
         const proc = yield* Effect.try({
           try: () =>
-            Bun.spawn(["codex", ...args], {
+            Bun.spawn([resolvedPath, ...args], {
               cwd: config.workingDirectory,
               env: spawnEnv,
               stdout: "pipe",
@@ -368,7 +420,7 @@ export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
           catch: (err) =>
             new AgentSpawnError({
               agentId,
-              command: `codex ${args.join(" ")}`,
+              command: `${resolvedPath} ${args.join(" ")}`,
               detail: String(err),
             }),
         });
@@ -399,6 +451,19 @@ export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
             const outputChunks: string[] = [];
             let detectedThreadId = resumeSessionId ?? "";
             let usage = { ...ZERO_USAGE };
+            let completedTurn: CompletedTurn | null = null;
+            let tracker = await createWorkspaceChangeTracker(
+              config.workingDirectory,
+            ).catch(() => null);
+            const finishTracking = async (): Promise<WorkspaceChanges> => {
+              if (!tracker) {
+                return EMPTY_WORKSPACE_CHANGES;
+              }
+
+              const activeTracker = tracker;
+              tracker = null;
+              return activeTracker.finish().catch(() => EMPTY_WORKSPACE_CHANGES);
+            };
 
             for await (const line of readJsonLines(stdout)) {
               const parsed = parseRawLine(line);
@@ -445,6 +510,12 @@ export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
 
                 case "turn_completed": {
                   usage = parsed.usage;
+                  completedTurn = {
+                    sessionId: detectedThreadId,
+                    usage: parsed.usage,
+                    durationMs: Math.max(Date.now() - startedAtMs, 0),
+                    costUsd: 0,
+                  };
 
                   Effect.runSync(
                     Effect.gen(function* () {
@@ -461,17 +532,6 @@ export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
                           process: null,
                         });
                       }
-
-                      yield* emit({
-                        type: "agent.turn.completed",
-                        schemaVersion: 1 as const,
-                        agentId,
-                        sessionId: detectedThreadId,
-                        usage: parsed.usage,
-                        durationMs: Math.max(Date.now() - startedAtMs, 0),
-                        costUsd: 0,
-                        occurredAt: nowIso(),
-                      });
                     }),
                   );
                   break;
@@ -485,6 +545,24 @@ export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
             const exitCode = await proc.exited;
             const stderrText = await new Response(stderr).text();
             const resultText = outputChunks.join("\n\n");
+            const workspaceChanges = await finishTracking();
+
+            if (completedTurn) {
+              Effect.runSync(
+                emit({
+                  type: "agent.turn.completed",
+                  schemaVersion: 1 as const,
+                  agentId,
+                  sessionId: completedTurn.sessionId,
+                  taskId,
+                  usage: completedTurn.usage,
+                  workspaceChanges,
+                  durationMs: completedTurn.durationMs,
+                  costUsd: completedTurn.costUsd,
+                  occurredAt: nowIso(),
+                }),
+              );
+            }
 
             if (stderrText) {
               console.error(`[codex-adapter] stderr for ${agentId}:`, stderrText);
@@ -638,6 +716,7 @@ export function createOpenAICodexAdapter(): Effect.Effect<AgentAdapterShape> {
           agentId,
           session.config,
           prompt,
+          taskId,
           effectiveSessionId || null,
         );
       });

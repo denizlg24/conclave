@@ -1,7 +1,10 @@
 import type {
+  AdapterBinaryResolution,
+  AdapterConnectionTestResult,
   AdapterModelSelections,
   AdapterOption,
   AdapterType,
+  AppSettings,
 } from "../types/adapter";
 import type { DebugConsoleEntry } from "../types/debug-console";
 
@@ -76,6 +79,15 @@ export type SerializedAgentRoster = {
   agents: SerializedAgentInfo[];
 };
 
+export type SerializedWorkspaceChanges = {
+  source: "git" | "filesystem";
+  added: string[];
+  modified: string[];
+  deleted: string[];
+  truncated: boolean;
+  totalCount: number;
+};
+
 export type SerializedAgentEvent = {
   type: string;
   agentId: string;
@@ -90,6 +102,7 @@ export type SerializedAgentEvent = {
     inputTokens: number;
     outputTokens: number;
   };
+  workspaceChanges?: SerializedWorkspaceChanges;
   costUsd?: number;
   durationMs?: number;
 };
@@ -127,6 +140,16 @@ export type SerializedAdapterState = {
   selectedModels: AdapterModelSelections;
 };
 
+export type SerializedAdapterBinaryResolution = AdapterBinaryResolution;
+export type SerializedAppSettings = AppSettings & {
+  settingsFilePath: string | null;
+  adapterResolutions: Record<
+    AdapterType,
+    SerializedAdapterBinaryResolution
+  >;
+};
+export type SerializedAdapterConnectionTestResult = AdapterConnectionTestResult;
+
 export type ConclaveRPCSchema = {
   bun: {
     requests: {
@@ -158,6 +181,10 @@ export type ConclaveRPCSchema = {
         params: Record<string, never>;
         response: SerializedAdapterState;
       };
+      getAppSettings: {
+        params: Record<string, never>;
+        response: SerializedAppSettings;
+      };
       setAdapter: {
         params: { adapterType: AdapterType };
         response: SerializedAdapterState;
@@ -165,6 +192,18 @@ export type ConclaveRPCSchema = {
       setAdapterModel: {
         params: { adapterType: AdapterType; model: string };
         response: SerializedAdapterState;
+      };
+      updateAppSettings: {
+        params: {
+          selectedAdapter?: AdapterType;
+          selectedModels?: Partial<AdapterModelSelections>;
+          adapterBinaryPaths?: Partial<Record<AdapterType, string | null>>;
+        };
+        response: SerializedAppSettings;
+      };
+      testAdapterConnection: {
+        params: { adapterType: AdapterType };
+        response: SerializedAdapterConnectionTestResult;
       };
       getDebugConsoleEntries: {
         params: Record<string, never>;

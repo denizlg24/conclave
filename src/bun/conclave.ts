@@ -2,6 +2,7 @@ import { Effect, Exit, Schema, Scope, Stream } from "effect";
 import { join } from "node:path";
 
 import type { BusEvent } from "@/shared/types/bus-event";
+import type { AgentRuntimeEvent } from "@/shared/types/agent-runtime";
 import type {
   AgentRole,
   OrchestrationCommand,
@@ -29,6 +30,7 @@ import {
 } from "@/core/communication/proposal-task-materializer";
 import { createMeetingOrchestrator } from "@/core/meetings";
 import { createAgentService } from "@/core/agents/service";
+import { resolveAdapterBinaryPath as autoResolveAdapterBinaryPath } from "@/core/agents/binary-path";
 import { createClaudeCodeAdapter } from "@/core/agents/claude-code-adapter";
 import { createOpenAICodexAdapter } from "@/core/agents/openai-codex-adapter";
 import { createAgentRuntimeEventStore } from "@/core/memory/agent-runtime-event-store";
@@ -41,6 +43,7 @@ import {
 } from "@/core/memory/meeting-task-proposal-store";
 import { createResumeHandler } from "./resume-handler";
 import {
+  type AdapterBinaryResolution,
   DEFAULT_ADAPTER_TYPE,
   defaultModelForAdapter,
   type AdapterType,
@@ -160,7 +163,7 @@ export interface ConclaveShape {
 
   readonly onEvent: (callback: (event: SerializedEvent, model: SerializedReadModel) => void) => void;
 
-  readonly onAgentEvent: (callback: (event: AgentRuntimeEventRecord) => void) => void;
+  readonly onAgentEvent: (callback: (event: AgentRuntimeEvent) => void) => void;
 
   readonly onAgentRoster: (callback: (roster: SerializedAgentRoster) => void) => void;
 
@@ -175,22 +178,33 @@ export interface ConclaveShape {
   readonly shutdown: () => Promise<void>;
 }
 
-function createAgentAdapter(adapterType: AdapterType) {
+function createAgentAdapter(
+  adapterType: AdapterType,
+  resolveAdapterBinaryPathForType?: (
+    adapterType: AdapterType,
+  ) => Promise<AdapterBinaryResolution>,
+) {
   switch (adapterType) {
     case "claude-code":
-      return createClaudeCodeAdapter();
+      return createClaudeCodeAdapter({
+        resolveBinaryPath: () =>
+          resolveAdapterBinaryPathForType?.("claude-code") ??
+          autoResolveAdapterBinaryPath({
+            adapterType: "claude-code",
+            manualPath: null,
+          }),
+      });
     case "openai-codex":
-      return createOpenAICodexAdapter();
+      return createOpenAICodexAdapter({
+        resolveBinaryPath: () =>
+          resolveAdapterBinaryPathForType?.("openai-codex") ??
+          autoResolveAdapterBinaryPath({
+            adapterType: "openai-codex",
+            manualPath: null,
+          }),
+      });
   }
 }
-
-type AgentRuntimeEventRecord = {
-  type: string;
-  agentId: string;
-  sessionId: string;
-  occurredAt: string;
-  [key: string]: unknown;
-};
 
 function decodeCommand(command: unknown): OrchestrationCommand {
   return Schema.decodeUnknownSync(OrchestrationCommandSchema)(command);
@@ -226,6 +240,9 @@ export async function bootstrapConclave(
   projectPath: string,
   adapterType: AdapterType = DEFAULT_ADAPTER_TYPE,
   model = defaultModelForAdapter(adapterType),
+  resolveAdapterBinaryPathForType?: (
+    adapterType: AdapterType,
+  ) => Promise<AdapterBinaryResolution>,
 ): Promise<ConclaveShape> {
   const scope = Effect.runSync(Scope.make());
   const memoryPath = join(projectPath, ".conclave", "memory");
@@ -291,7 +308,10 @@ export async function bootstrapConclave(
       logPrefix: "[bootstrap]",
     });
 
-    const adapter = yield* createAgentAdapter(adapterType);
+    const adapter = yield* createAgentAdapter(
+      adapterType,
+      resolveAdapterBinaryPathForType,
+    );
     const agentService = createAgentService(adapter, undefined, model);
 
     yield* agentService.startAgent(
@@ -336,13 +356,14 @@ export async function bootstrapConclave(
       receiptStore,
       meetingOrchestrator,
       projectPath,
+      agentRuntimeEventStore,
     }).pipe(Effect.provideService(Scope.Scope, scope));
 
     const eventCallbacks: Array<
       (event: SerializedEvent, model: SerializedReadModel) => void
     > = [];
     const agentEventCallbacks: Array<
-      (event: AgentRuntimeEventRecord) => void
+      (event: AgentRuntimeEvent) => void
     > = [];
     const rosterCallbacks: Array<
       (roster: SerializedAgentRoster) => void
@@ -447,9 +468,8 @@ export async function bootstrapConclave(
           yield* agentRuntimeEventStore.append(event);
           yield* bus.publish(event);
 
-          const record = event as unknown as AgentRuntimeEventRecord;
           for (const cb of agentEventCallbacks) {
-            cb(record);
+            cb(event);
           }
           
           // Special handling for quota exhaustion events
@@ -733,7 +753,7 @@ export async function bootstrapConclave(
   };
 
   const onAgentEvent = (
-    callback: (event: AgentRuntimeEventRecord) => void,
+    callback: (event: AgentRuntimeEvent) => void,
   ) => {
     agentEventCallbacks.push(callback);
   };

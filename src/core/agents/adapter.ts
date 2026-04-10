@@ -1,7 +1,10 @@
 import type { Effect, Stream } from "effect";
 
 import type { AgentId, TaskId } from "@/shared/types/base-schemas";
-import type { AdapterType } from "@/shared/types/adapter";
+import type {
+  AdapterBinaryResolution,
+  AdapterType,
+} from "@/shared/types/adapter";
 import type {
   AgentRoleConfig,
   AgentRuntimeEvent,
@@ -46,6 +49,8 @@ export interface QuotaExhaustedDetector {
    */
   readonly check: (content: string) => QuotaExhaustedCheckResult;
 }
+
+export type AdapterBinaryPathResolver = () => Promise<AdapterBinaryResolution>;
 
 export interface AgentAdapterShape {
   readonly adapterType: AdapterType;
