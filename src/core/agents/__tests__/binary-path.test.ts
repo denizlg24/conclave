@@ -77,6 +77,40 @@ describe("resolveAdapterBinaryPath", () => {
     expect(resolution.errorCode).toBeNull();
   });
 
+  test("prefers a .cmd shim over a sibling .exe launcher on Windows", async () => {
+    const directory = createTempDirectory("conclave-binary-path-shim-");
+    const cmdShimPath = join(directory, "claude.cmd");
+    const exeLauncherPath = join(directory, "claude.exe");
+    writeFileSync(cmdShimPath, "@echo off\r\n", "utf8");
+    writeFileSync(exeLauncherPath, "", "utf8");
+
+    const resolution = await resolveAdapterBinaryPath({
+      adapterType: "claude-code",
+      manualPath: null,
+      platform: "win32",
+      env: { PATH: directory, PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+    });
+
+    expect(resolution.source).toBe("detected");
+    expect(resolution.resolvedPath).toBe(cmdShimPath);
+  });
+
+  test("falls back to .exe when no shim is present", async () => {
+    const directory = createTempDirectory("conclave-binary-path-exe-only-");
+    const exePath = join(directory, "codex.exe");
+    writeFileSync(exePath, "", "utf8");
+
+    const resolution = await resolveAdapterBinaryPath({
+      adapterType: "openai-codex",
+      manualPath: null,
+      platform: "win32",
+      env: { PATH: directory, PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+    });
+
+    expect(resolution.source).toBe("detected");
+    expect(resolution.resolvedPath).toBe(exePath);
+  });
+
   test("returns a not-found error when detection fails", async () => {
     const resolution = await resolveAdapterBinaryPath({
       adapterType: "claude-code",

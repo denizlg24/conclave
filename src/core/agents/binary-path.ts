@@ -37,6 +37,12 @@ function hasPathSeparators(value: string): boolean {
   return value.includes("/") || value.includes("\\");
 }
 
+// Windows shim extensions are preferred over native `.exe` launchers for
+// adapter binaries. Native launchers (e.g. Anthropic's standalone claude.exe)
+// have been observed to hang when parent stdin is a piped, non-TTY handle;
+// the `.cmd` shim routes through cmd.exe and forwards stdin correctly.
+const WINDOWS_PREFERRED_SHIM_EXTENSIONS: readonly string[] = [".cmd", ".bat"];
+
 function normalizeWindowsExtensions(
   candidate: string,
   env: NodeJS.ProcessEnv,
@@ -46,13 +52,27 @@ function normalizeWindowsExtensions(
   }
 
   const pathExt = env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
-  const extensions = pathExt
+  const systemExtensions = pathExt
     .split(";")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
     .map((entry) => entry.toLowerCase());
 
-  return [candidate, ...extensions.map((entry) => `${candidate}${entry}`)];
+  const seen = new Set<string>();
+  const orderedExtensions: string[] = [];
+  for (const extension of [
+    ...WINDOWS_PREFERRED_SHIM_EXTENSIONS,
+    ...systemExtensions,
+  ]) {
+    if (seen.has(extension)) continue;
+    seen.add(extension);
+    orderedExtensions.push(extension);
+  }
+
+  return [
+    candidate,
+    ...orderedExtensions.map((entry) => `${candidate}${entry}`),
+  ];
 }
 
 async function resolveFromPath(
