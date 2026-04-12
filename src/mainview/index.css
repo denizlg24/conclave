@@ -251,6 +251,23 @@
   z-index: 0;
 }
 
+.conclave-home-shell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(6, 9, 7, 0.55) 0%, transparent 18%, transparent 82%, rgba(6, 9, 7, 0.62) 100%);
+}
+
+.conclave-surface-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.016) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.016) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.82), transparent 94%);
+}
+
 .rpg-panel {
   background: var(--rpg-panel);
   border: 1px solid var(--rpg-border);

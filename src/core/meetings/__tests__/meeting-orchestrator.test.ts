@@ -58,6 +58,11 @@ type MockAgentService = {
   agents: AgentSession[];
   messages: Array<{ agentId: AgentId; prompt: string }>;
   responses: Map<string, string>;
+  spawnRequests: Array<{
+    role: AgentRole;
+    workingDirectory: string;
+    configOverrides?: { model?: string };
+  }>;
 };
 
 function createMockAgentService(
@@ -71,9 +76,11 @@ function createMockAgentService(
     agents: initialAgents ?? [],
     messages: [],
     responses: responseMap ?? new Map(),
+    spawnRequests: [],
   };
 
   const service: AgentServiceShape = {
+    adapterType: "openai-codex",
     startAgent: () => Effect.succeed(makeAgentSession()),
     sendMessage: (agentId, prompt) =>
       Effect.gen(function* () {
@@ -93,7 +100,22 @@ function createMockAgentService(
     streamEvents: Stream.empty,
     markBusy: () => {},
     markAvailable: () => {},
-    findOrSpawnAgent: () => Effect.succeed(makeAgentSession()),
+    findOrSpawnAgent: (role, workingDirectory, configOverrides) =>
+      Effect.gen(function* () {
+        mock.spawnRequests.push({
+          role,
+          workingDirectory,
+          configOverrides:
+            configOverrides && "model" in configOverrides
+              ? { model: configOverrides.model }
+              : undefined,
+        });
+        const existingAgent = mock.agents.find((agent) => agent.role === role);
+        if (existingAgent) {
+          return existingAgent;
+        }
+        return makeAgentSession({ role });
+      }),
     getTeamComposition: () => ({
       pm: { max: 1, active: 0 },
       developer: { max: 3, active: 0 },
@@ -239,7 +261,8 @@ describe("MeetingOrchestrator", () => {
       mock.responses.set(devAgent.agentId, "Developer contribution");
       const serviceWithoutPm: AgentServiceShape = {
         ...service,
-        findOrSpawnAgent: () => Effect.succeed(null),
+        findOrSpawnAgent: (role) =>
+          Effect.succeed(role === "developer" ? devAgent : null),
       };
 
       const orchestrator = createMeetingOrchestrator({ engine, agentService: serviceWithoutPm });
@@ -329,6 +352,36 @@ describe("MeetingOrchestrator", () => {
       expect(result.proposedTaskCount).toBe(2);
     });
 
+    test("routes standard meeting contributions and synthesis through the secondary model", async () => {
+      const meetingId = makeMeetingId("meeting-secondary-routing");
+      const meeting = makeMeeting({
+        id: meetingId,
+        agenda: ["Plan next iteration"] as (string & { readonly TrimmedNonEmptyString: unique symbol })[],
+        participants: ["developer"] as AgentRole[],
+      });
+      const readModel = {
+        ...makeEmptyReadModel(),
+        meetings: [meeting],
+      };
+
+      const { engine } = createMockEngine(readModel);
+      const { service, mock } = createMockAgentService([]);
+      const orchestrator = createMeetingOrchestrator({ engine, agentService: service });
+
+      await Effect.runPromise(orchestrator.runMeeting(meetingId));
+
+      expect(mock.spawnRequests).toHaveLength(2);
+      expect(mock.spawnRequests.map((request) => request.role)).toEqual([
+        "developer",
+        "pm",
+      ]);
+      expect(
+        mock.spawnRequests.every(
+          (request) => request.configOverrides?.model === "gpt-5.4-mini",
+        ),
+      ).toBe(true);
+    });
+
     test("handles malformed PM synthesis gracefully", async () => {
       const meetingId = makeMeetingId("meeting-7");
       const meeting = makeMeeting({
@@ -387,7 +440,9 @@ describe("MeetingOrchestrator", () => {
       });
 
       const messages: Array<{ agentId: AgentId; prompt: string }> = [];
+      const spawnRequests: Array<{ role: AgentRole; model?: string }> = [];
       const service: AgentServiceShape = {
+        adapterType: "openai-codex",
         startAgent: () => Effect.succeed(makeAgentSession()),
         sendMessage: (agentId, prompt) =>
           Effect.gen(function* () {
@@ -405,8 +460,16 @@ describe("MeetingOrchestrator", () => {
         streamEvents: Stream.empty,
         markBusy: () => {},
         markAvailable: () => {},
-        findOrSpawnAgent: (role) =>
-          Effect.succeed(role === "reviewer" ? spawnedReviewer : spawnedPm),
+        findOrSpawnAgent: (role, _workingDirectory, configOverrides) => {
+          spawnRequests.push({
+            role,
+            model:
+              configOverrides && "model" in configOverrides
+                ? configOverrides.model
+                : undefined,
+          });
+          return Effect.succeed(role === "reviewer" ? spawnedReviewer : spawnedPm);
+        },
         getTeamComposition: () => ({
           pm: { max: 1, active: 0 },
           developer: { max: 3, active: 0 },
@@ -426,6 +489,10 @@ describe("MeetingOrchestrator", () => {
       expect(messages.map((message) => message.agentId)).toEqual([
         spawnedReviewer.agentId,
         spawnedPm.agentId,
+      ]);
+      expect(spawnRequests).toEqual([
+        { role: "reviewer", model: "gpt-5.4-mini" },
+        { role: "pm", model: "gpt-5.4-mini" },
       ]);
     });
 

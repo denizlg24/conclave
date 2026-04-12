@@ -1,6 +1,9 @@
 import { Effect, Stream } from "effect";
 
-import { defaultModelForAdapter } from "@/shared/types/adapter";
+import {
+  defaultModelForAdapter,
+  type AdapterType,
+} from "@/shared/types/adapter";
 import type { AgentId, TaskId } from "@/shared/types/base-schemas";
 import type {
   AgentRoleConfig,
@@ -126,6 +129,8 @@ export type TeamComposition = Record<
 >;
 
 export interface AgentServiceShape {
+  readonly adapterType: AdapterType;
+
   readonly startAgent: (
     agentId: AgentId,
     role: AgentRole,
@@ -160,6 +165,7 @@ export interface AgentServiceShape {
   readonly findOrSpawnAgent: (
     role: AgentRole,
     workingDirectory: string,
+    configOverrides?: Partial<AgentRoleConfig>,
   ) => Effect.Effect<AgentSession | null, AgentError>;
 
   readonly getTeamComposition: () => TeamComposition;
@@ -260,10 +266,12 @@ export function createAgentService(
   const findOrSpawnAgent: AgentServiceShape["findOrSpawnAgent"] = (
     role,
     workingDirectory,
+    configOverrides,
   ) =>
     Effect.gen(function* () {
       const agents = yield* adapter.listSessions();
       const roleAgents = agents.filter((a) => a.role === role);
+      const requestedModel = configOverrides?.model ?? defaultModel;
 
       const idle = roleAgents.find((a) => !busyAgents.has(a.agentId));
       if (idle) {
@@ -274,17 +282,27 @@ export function createAgentService(
           idle.cumulativeUsage.outputTokens > 0 ||
           idle.cumulativeUsage.cacheCreationInputTokens > 0 ||
           idle.cumulativeUsage.cacheReadInputTokens > 0;
+        const hasRequestedModel = idle.config.model === requestedModel;
 
-        if (!hasPriorTaskContext) {
+        if (!hasPriorTaskContext && hasRequestedModel) {
           return idle;
         }
+
+        const {
+          workingDirectory: _idleWorkingDirectory,
+          role: _idleRole,
+          ...idleConfig
+        } = idle.config;
 
         yield* stopAgent(idle.agentId);
         return yield* startAgent(
           idle.agentId,
           role,
-          idle.config.workingDirectory,
-          idle.config,
+          workingDirectory,
+          {
+            ...idleConfig,
+            ...configOverrides,
+          },
         );
       }
 
@@ -300,7 +318,12 @@ export function createAgentService(
       console.log(
         `[agent-service] Spawning new ${role} agent: ${agentId} (${roleAgents.length + 1}/${max})`,
       );
-      const session = yield* startAgent(agentId, role, workingDirectory);
+      const session = yield* startAgent(
+        agentId,
+        role,
+        workingDirectory,
+        configOverrides,
+      );
       return session;
     });
 
@@ -327,6 +350,7 @@ export function createAgentService(
   };
 
   return {
+    adapterType: adapter.adapterType,
     startAgent,
     sendMessage,
     interruptAgent,

@@ -28,7 +28,9 @@ import {
   makeEventId,
   makeIsoDate,
   makeMeetingId,
+  makeTask,
   makeTaskId,
+  makeTaskCreatedEvent,
   makeTokenUsage,
   makeAgentRoleConfig,
   resetCounters,
@@ -53,9 +55,18 @@ function makeAgentSession(): AgentSession {
   };
 }
 
-function makeAgentService(): AgentServiceShape {
+function makeAgentService(options?: {
+  adapterType?: AgentSession["adapterType"];
+  onFindOrSpawnAgent?: (params: {
+    role: string;
+    workingDirectory: string;
+    configOverrides?: { model?: string };
+  }) => void;
+  session?: AgentSession | null;
+}): AgentServiceShape {
   const session = makeAgentSession();
   return {
+    adapterType: options?.adapterType ?? "openai-codex",
     startAgent: () => Effect.succeed(session),
     sendMessage: () => Effect.succeed(""),
     interruptAgent: () => Effect.void,
@@ -66,7 +77,17 @@ function makeAgentService(): AgentServiceShape {
     streamEvents: Stream.empty as Stream.Stream<AgentRuntimeEvent>,
     markBusy: () => undefined,
     markAvailable: () => undefined,
-    findOrSpawnAgent: () => Effect.succeed(null),
+    findOrSpawnAgent: (role, workingDirectory, configOverrides) => {
+      options?.onFindOrSpawnAgent?.({
+        role,
+        workingDirectory,
+        configOverrides:
+          configOverrides && "model" in configOverrides
+            ? { model: configOverrides.model }
+            : undefined,
+      });
+      return Effect.succeed(options?.session ?? session);
+    },
     getTeamComposition: () => ({
       pm: { max: 1, active: 0 },
       developer: { max: 1, active: 0 },
@@ -195,6 +216,118 @@ beforeEach(() => {
 });
 
 describe("orchestrator-reactor", () => {
+  test("routes planning tasks to the secondary model", async () => {
+    const task = makeTask({
+      id: makeTaskId("planning-task"),
+      taskType: "planning",
+    });
+    const readModel = {
+      ...makeEmptyReadModel(),
+      tasks: [task],
+    };
+    const { engine } = makeMockEngine(readModel);
+    const calls: Array<{ role: string; workingDirectory: string; configOverrides?: { model?: string } }> = [];
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const bus = yield* createEventBus();
+          const receiptStore = yield* createReceiptStore();
+          yield* createOrchestratorReactor({
+            engine,
+            bus,
+            receiptStore,
+            agentService: makeAgentService({
+              adapterType: "openai-codex",
+              onFindOrSpawnAgent: (params) => calls.push(params),
+            }),
+            workingDirectory: "E:\\PersonalProjects\\ai_orchestration_rpg",
+            proposalStore: makeProposalStore(),
+          });
+
+          yield* Effect.sleep(Duration.millis(20));
+          yield* bus.publish(
+            makeTaskCreatedEvent(task.id, 1, {
+              payload: {
+                taskId: task.id,
+                taskType: "planning",
+                title: task.title,
+                description: task.description,
+                deps: [],
+                input: null,
+                createdAt: task.createdAt,
+              },
+            }),
+          );
+          yield* Effect.sleep(Duration.millis(80));
+        }),
+      ),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      role: "pm",
+      workingDirectory: "E:\\PersonalProjects\\ai_orchestration_rpg",
+      configOverrides: { model: "gpt-5.4-mini" },
+    });
+  });
+
+  test("keeps implementation tasks on the primary model", async () => {
+    const task = makeTask({
+      id: makeTaskId("implementation-task"),
+      taskType: "implementation",
+    });
+    const readModel = {
+      ...makeEmptyReadModel(),
+      tasks: [task],
+    };
+    const { engine } = makeMockEngine(readModel);
+    const calls: Array<{ role: string; workingDirectory: string; configOverrides?: { model?: string } }> = [];
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const bus = yield* createEventBus();
+          const receiptStore = yield* createReceiptStore();
+          yield* createOrchestratorReactor({
+            engine,
+            bus,
+            receiptStore,
+            agentService: makeAgentService({
+              adapterType: "openai-codex",
+              onFindOrSpawnAgent: (params) => calls.push(params),
+            }),
+            workingDirectory: "E:\\PersonalProjects\\ai_orchestration_rpg",
+            proposalStore: makeProposalStore(),
+          });
+
+          yield* Effect.sleep(Duration.millis(20));
+          yield* bus.publish(
+            makeTaskCreatedEvent(task.id, 1, {
+              payload: {
+                taskId: task.id,
+                taskType: "implementation",
+                title: task.title,
+                description: task.description,
+                deps: [],
+                input: null,
+                createdAt: task.createdAt,
+              },
+            }),
+          );
+          yield* Effect.sleep(Duration.millis(80));
+        }),
+      ),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      role: "developer",
+      workingDirectory: "E:\\PersonalProjects\\ai_orchestration_rpg",
+      configOverrides: undefined,
+    });
+  });
+
   test("creates proposed tasks with proposalId, proposedByMeeting, and preserved input", async () => {
     const meetingId = makeMeetingId("reactor-mtg");
     const proposalId = "proposal-1" as ProposalId;

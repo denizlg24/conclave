@@ -89,6 +89,7 @@ function makeMockAgentService(
     tester: { max: 2, active: 0 },
   };
   return {
+    adapterType: overrides.adapterType ?? "claude-code",
     startAgent: overrides.startAgent ?? (() => Effect.succeed(makeAgentSession())),
     sendMessage: overrides.sendMessage ?? (() => Effect.succeed("mock output")),
     interruptAgent: overrides.interruptAgent ?? (() => Effect.void),

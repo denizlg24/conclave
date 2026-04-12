@@ -71,6 +71,40 @@ describe("createAppSettingsStore", () => {
 });
 
 describe("sanitizeAppSettings", () => {
+  test("accepts every newly cataloged model value", () => {
+    const settings = sanitizeAppSettings({
+      selectedAdapter: "openai-codex",
+      selectedModels: {
+        "claude-code": "claude-haiku-4-5",
+        "openai-codex": "gpt-5.2-codex",
+      },
+      adapterBinaryPaths: {},
+    });
+
+    expect(settings.selectedModels["claude-code"]).toBe("claude-haiku-4-5");
+    expect(settings.selectedModels["openai-codex"]).toBe("gpt-5.2-codex");
+
+    const additionalOpenAiModels = [
+      "gpt-5.4-mini",
+      "gpt-5.3",
+      "gpt-5.3-codex-spark",
+      "gpt-5.2",
+    ] as const;
+
+    for (const model of additionalOpenAiModels) {
+      const nextSettings = sanitizeAppSettings({
+        selectedAdapter: "openai-codex",
+        selectedModels: {
+          "claude-code": "claude-sonnet-4-6",
+          "openai-codex": model,
+        },
+        adapterBinaryPaths: {},
+      });
+
+      expect(nextSettings.selectedModels["openai-codex"]).toBe(model);
+    }
+  });
+
   test("drops invalid adapter values and models from persisted data", async () => {
     const settingsFilePath = createTempSettingsPath();
 

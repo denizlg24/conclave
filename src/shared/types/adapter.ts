@@ -1,3 +1,5 @@
+import type { TaskType } from "./orchestration";
+
 export const ADAPTER_TYPES = ["claude-code", "openai-codex"] as const;
 
 export type AdapterType = (typeof ADAPTER_TYPES)[number];
@@ -77,6 +79,11 @@ const ADAPTER_OPTION_MAP = {
         label: "Opus 4.6",
         description: "Latest Opus model for complex reasoning tasks.",
       },
+      {
+        value: "claude-haiku-4-5",
+        label: "Claude Haiku 4.5",
+        description: "Pinned Claude Haiku 4.5 route for planning and meeting work.",
+      },
     ],
   },
   "openai-codex": {
@@ -96,6 +103,31 @@ const ADAPTER_OPTION_MAP = {
         label: "GPT-5.3 Codex",
         description: "Previous coding-focused Codex model.",
       },
+      {
+        value: "gpt-5.4-mini",
+        label: "GPT-5.4 Mini",
+        description: "Smaller GPT-5.4 variant for high-volume coordination work.",
+      },
+      {
+        value: "gpt-5.3",
+        label: "GPT-5.3",
+        description: "General GPT-5.3 model surfaced by current OpenAI releases.",
+      },
+      {
+        value: "gpt-5.3-codex-spark",
+        label: "GPT-5.3 Codex Spark",
+        description: "Fast Codex-tuned GPT-5.3 Spark variant.",
+      },
+      {
+        value: "gpt-5.2-codex",
+        label: "GPT-5.2 Codex",
+        description: "Earlier Codex-specialized GPT-5.2 model.",
+      },
+      {
+        value: "gpt-5.2",
+        label: "GPT-5.2",
+        description: "General GPT-5.2 model option for compatibility testing.",
+      },
     ],
   },
 } as const satisfies Record<AdapterType, AdapterOption>;
@@ -106,6 +138,15 @@ export const ADAPTER_OPTIONS: ReadonlyArray<AdapterOption> = ADAPTER_TYPES.map(
 
 export function defaultModelForAdapter(adapterType: AdapterType): string {
   return ADAPTER_OPTION_MAP[adapterType].defaultModel;
+}
+
+export function secondaryModelForAdapter(adapterType: AdapterType): string {
+  switch (adapterType) {
+    case "claude-code":
+      return "claude-haiku-4-5";
+    case "openai-codex":
+      return "gpt-5.4-mini";
+  }
 }
 
 export function createDefaultAdapterModelSelections(): AdapterModelSelections {
@@ -145,4 +186,12 @@ export function isAdapterModel(
   value: string,
 ): boolean {
   return getAdapterModels(adapterType).some((model) => model.value === value);
+}
+
+export function taskUsesSecondaryModel(taskType: TaskType): boolean {
+  return taskType === "planning" || taskType === "decomposition";
+}
+
+export function meetingUsesSecondaryModel(): true {
+  return true;
 }

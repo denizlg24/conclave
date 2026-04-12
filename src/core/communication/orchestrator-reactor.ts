@@ -1,5 +1,9 @@
 import { Effect, Fiber, Stream, type Scope } from "effect";
 
+import {
+  secondaryModelForAdapter,
+  taskUsesSecondaryModel,
+} from "@/shared/types/adapter";
 import type { OrchestrationEvent, TaskType, AgentRole } from "@/shared/types/orchestration";
 import type { AgentRuntimeEvent } from "@/shared/types/agent-runtime";
 import type { BusEvent } from "@/shared/types/bus-event";
@@ -45,7 +49,14 @@ export function createOrchestratorReactor(deps: {
   const tryAutoAssign = (taskId: TaskId, taskType: TaskType) =>
     Effect.gen(function* () {
       const role = TASK_ROLE_MAP[taskType];
-      const agent = yield* agentService.findOrSpawnAgent(role, workingDirectory);
+      const configOverrides = taskUsesSecondaryModel(taskType)
+        ? { model: secondaryModelForAdapter(agentService.adapterType) }
+        : undefined;
+      const agent = yield* agentService.findOrSpawnAgent(
+        role,
+        workingDirectory,
+        configOverrides,
+      );
       if (!agent) {
         console.log(
           `[${REACTOR_NAME}] No available agent for role '${role}' (task '${taskId}') — will retry when an agent frees up`,

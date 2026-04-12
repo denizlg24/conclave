@@ -2,6 +2,10 @@ import { Effect } from "effect";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import {
+  meetingUsesSecondaryModel,
+  secondaryModelForAdapter,
+} from "@/shared/types/adapter";
 import type { AgentRole, MeetingTaskDependencyRef } from "@/shared/types/orchestration";
 import type { CommandId, MeetingId } from "@/shared/types/base-schemas";
 
@@ -255,18 +259,18 @@ export function createMeetingOrchestrator(deps: {
 
   const getOrSpawnAgent = (
     role: AgentRole,
-    agents: ReadonlyArray<AgentSession>,
+    workingDirectory: string,
     meetingId: MeetingId,
     operation: string,
+    modelOverride?: string,
   ): Effect.Effect<AgentSession, MeetingError> =>
     Effect.gen(function* () {
-      const existing = agents.find((agent) => agent.role === role);
-      if (existing) {
-        return existing;
-      }
-
       const spawned = yield* agentService
-        .findOrSpawnAgent(role, getWorkingDirectory(agents))
+        .findOrSpawnAgent(
+          role,
+          workingDirectory,
+          modelOverride ? { model: modelOverride } : undefined,
+        )
         .pipe(
           Effect.mapError(
             (cause) =>
@@ -315,11 +319,16 @@ export function createMeetingOrchestrator(deps: {
       yield* ensureMeetingInProgress(meetingId);
 
       const agents = yield* agentService.listAgents();
+      const workingDirectory = getWorkingDirectory(agents);
+      const meetingModelOverride = meetingUsesSecondaryModel()
+        ? secondaryModelForAdapter(agentService.adapterType)
+        : undefined;
       const reviewerAgent = yield* getOrSpawnAgent(
         "reviewer",
-        agents,
+        workingDirectory,
         meetingId,
         "meeting.contribute",
+        meetingModelOverride,
       );
 
       // 2. Reviewer reads work summaries and writes review
@@ -386,9 +395,10 @@ export function createMeetingOrchestrator(deps: {
       // 3. PM reads review and synthesizes proposed tasks
       const pmAgent = yield* getOrSpawnAgent(
         "pm",
-        agents,
+        workingDirectory,
         meetingId,
         "meeting.synthesis",
+        meetingModelOverride,
       );
 
       const synthesisPrompt = [
@@ -503,14 +513,22 @@ export function createMeetingOrchestrator(deps: {
       const workingDirectory =
         agents[0]?.config.workingDirectory ??
         process.cwd();
+      const meetingModelOverride = meetingUsesSecondaryModel()
+        ? secondaryModelForAdapter(agentService.adapterType)
+        : undefined;
       const artifactsDir = ensureMeetingArtifactsDir(workingDirectory, meetingId);
 
       for (let itemIdx = 0; itemIdx < meeting.agenda.length; itemIdx++) {
         const agendaItem = meeting.agenda[itemIdx]!;
 
         for (const role of meeting.participants) {
-          const agent = agents.find((a) => a.role === role);
-          if (!agent) continue;
+          const agent = yield* getOrSpawnAgent(
+            role,
+            workingDirectory,
+            meetingId,
+            "meeting.contribute",
+            meetingModelOverride,
+          );
 
           const roleSpecificGuidance =
             ROLE_GUIDANCE[meetingType]?.[role] ?? "";
@@ -587,9 +605,10 @@ export function createMeetingOrchestrator(deps: {
       // 3. PM synthesis
       const pmAgent = yield* getOrSpawnAgent(
         "pm",
-        agents,
+        workingDirectory,
         meetingId,
         "meeting.synthesis",
+        meetingModelOverride,
       );
 
       const manifestPath = writeMeetingManifest(

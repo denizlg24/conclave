@@ -4,7 +4,12 @@ import { Effect, Exit, Cause, Stream, Queue } from "effect";
 import { createAgentService } from "../service";
 import type { AgentAdapterShape, AgentSession, QuotaExhaustedDetector } from "../adapter";
 import { AgentAdapterError } from "../errors";
-import { resetCounters, makeAgentId } from "@/test-utils/factories";
+import {
+  resetCounters,
+  makeAgentId,
+  makeAgentRoleConfig,
+  makeAgentSession,
+} from "@/test-utils/factories";
 import type { AgentId, TaskId } from "@/shared/types/base-schemas";
 import type { AgentRole } from "@/shared/types/orchestration";
 import type { AgentRoleConfig, AgentRuntimeEvent } from "@/shared/types/agent-runtime";
@@ -491,6 +496,63 @@ describe("createAgentService", () => {
       expect(list).toHaveLength(2);
       expect(list.map((s) => s.role)).toContain("pm");
       expect(list.map((s) => s.role)).toContain("developer");
+    });
+  });
+
+  describe("findOrSpawnAgent", () => {
+    test("starts a session with requested config overrides", async () => {
+      const adapter = createMockAdapter(new Map(), {
+        adapterType: "openai-codex",
+      });
+      const service = createAgentService(adapter);
+
+      const session = await Effect.runPromise(
+        service.findOrSpawnAgent("developer", "/tmp/project", {
+          model: "gpt-5.4-mini",
+        }),
+      );
+
+      expect(session).not.toBeNull();
+      expect(session?.config.model).toBe("gpt-5.4-mini");
+      expect(session?.config.workingDirectory).toBe("/tmp/project");
+    });
+
+    test("restarts an idle session when the requested model changes", async () => {
+      const agentId = makeAgentId("existing-dev");
+      const existingSession = makeAgentSession({
+        agentId,
+        adapterType: "openai-codex",
+        role: "developer",
+        sessionId: "session-existing",
+        model: "gpt-5.4",
+        config: makeAgentRoleConfig({
+          role: "developer",
+          workingDirectory: "/tmp/original",
+          model: "gpt-5.4" as AgentRoleConfig["model"],
+        }),
+        cumulativeUsage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+        },
+      });
+      const sessions = new Map<AgentId, AgentSession>([[agentId, existingSession]]);
+      const adapter = createMockAdapter(sessions, {
+        adapterType: "openai-codex",
+      });
+      const service = createAgentService(adapter);
+
+      const session = await Effect.runPromise(
+        service.findOrSpawnAgent("developer", "/tmp/requested", {
+          model: "gpt-5.4-mini",
+        }),
+      );
+
+      expect(session).not.toBeNull();
+      expect(session?.agentId).toBe(agentId);
+      expect(session?.config.model).toBe("gpt-5.4-mini");
+      expect(session?.config.workingDirectory).toBe("/tmp/requested");
     });
   });
 
